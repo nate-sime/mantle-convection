@@ -64,15 +64,13 @@ def run_mantle_convection():
 
     # Free slip Stokes formulation with interior penalty parameter, alpha
     n = FacetNormal(msh)
-    alpha = fem.Constant(msh, PETSc.ScalarType(12.0 * k**2))
+    alpha = fem.Constant(msh, PETSc.ScalarType(6.0 * k**2))
 
-    def sigma(u):
-        return 2 * mu * ufl.sym(ufl.grad(u))
-    a_00 = (
-            inner(sigma(u), ufl.sym(grad(v))) * dx
-            - inner(sigma(u), outer(dot(v, n) * n, n)) * ds
-            - inner(outer(dot(u, n) * n, n), sigma(v)) * ds
-            + mu * alpha / h * inner(outer(dot(u, n) * n, n), outer(v, n)) * ds)
+    a_00 = mu * (
+            inner(grad(u), grad(v)) * dx
+            - inner(grad(u), outer(dot(v, n) * n, n)) * ds
+            - inner(outer(dot(u, n) * n, n), grad(v)) * ds
+            + alpha / h * inner(outer(dot(u, n) * n, n), outer(v, n)) * ds)
     a_01 = - inner(p, div(v)) * dx + inner(p, dot(v, n)) * ds
     a_10 = - inner(div(u), q) * dx + inner(dot(u, n), q) * ds
 
