@@ -64,12 +64,11 @@ def run_mantle_convection():
 
     # Free slip Stokes formulation with interior penalty parameter, alpha
     n = FacetNormal(msh)
-    alpha = fem.Constant(msh, PETSc.ScalarType(6.0 * k**2))
+    alpha = fem.Constant(msh, PETSc.ScalarType(12.0 * k**2))
 
     def sigma(u):
         return 2 * mu * ufl.sym(ufl.grad(u))
-
-    a_00 = mu * (
+    a_00 = (
             inner(sigma(u), ufl.sym(grad(v))) * dx
             - inner(sigma(u), outer(dot(v, n) * n, n)) * ds
             - inner(outer(dot(u, n) * n, n), sigma(v)) * ds
@@ -87,7 +86,7 @@ def run_mantle_convection():
             ufl.cos(theta)))
 
     # Thermal buoyancy formulation with Rayleigh number
-    Ra = fem.Constant(msh, PETSc.ScalarType(7e3))
+    Ra = fem.Constant(msh, PETSc.ScalarType(1e4))
     L_0 = inner(- Ra * T_n * g_hat, v) * dx
     L_1 = inner(fem.Constant(msh, PETSc.ScalarType(0.0)), q) * dx
 
@@ -281,9 +280,9 @@ def run_mantle_convection():
         T_n.x.scatter_forward()
 
         Nu_t, Nu_b = compute_nusselt()
-        PETSc.Sys.Print(f"Nu_t = {Nu_t:.3e}, Nu_b = {Nu_b:.3e}, "
-                        f"<T> = {domain_average(msh, T_n):.3e}, "
-                        f"<u> = {domain_average(msh, dot(u_h, u_h))**0.5:.3e}")
+        PETSc.Sys.Print(f"Nu_t = {Nu_t:.9e}, Nu_b = {Nu_b:.9e}, "
+                        f"<T> = {domain_average(msh, T_n):.9e}, "
+                        f"<u> = {domain_average(msh, dot(u_h, u_h))**0.5:.9e}")
 
         writer.write(t)
 

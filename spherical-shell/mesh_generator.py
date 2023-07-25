@@ -11,7 +11,21 @@ volume_id = {"fluid": 1}
 boundary_id = {"core": 2, "surface": 3}
 
 
-def generate_earth(comm, gdim, r0, r1, h=0.1, geom_p=1):
+def generate_spherical_shell_gmsh(
+        comm: MPI.Intracomm, r0: float, r1: float, h: float=0.1,
+        geom_p: int=1):
+    """Generate a spherical shell using gmsh and OpenCASCADE
+
+    Args:
+        comm: MPI communicator
+        r0: Inner radius
+        r1: Outer radius
+        h: Approximate cell size (`Mesh.CharacteristicLengthMax`)
+        geom_p: Geometry degree
+
+    Returns:
+        Mesh, facet labels, dictionary describing facet labels
+    """
     gmsh.initialize()
 
     if comm.rank == 0:
@@ -35,7 +49,7 @@ def generate_earth(comm, gdim, r0, r1, h=0.1, geom_p=1):
 
     partitioner = mesh.create_cell_partitioner(mesh.GhostMode.none)
     msh, cell_tags, ft = io.gmshio.model_to_mesh(
-        gmsh.model, comm, rank=0, gdim=gdim, partitioner=partitioner)
+        gmsh.model, comm, rank=0, gdim=3, partitioner=partitioner)
     ft.name = "Facet markers"
 
     return msh, ft, boundary_id
@@ -43,7 +57,18 @@ def generate_earth(comm, gdim, r0, r1, h=0.1, geom_p=1):
 
 def generate_box(comm: MPI.Intracomm, coords: list, n: list, order: int,
                  gen_on_rank: int=0):
+    """Generate a box mesh of arbitrary degree
 
+    Args:
+        comm: MPI communicator
+        coords: Bottom left and top right coordinates
+        n: Number of cells in each orthogonal direction
+        order: Geometry order
+        gen_on_rank: MPI rank on which to generate data
+
+    Returns:
+        The box mesh
+    """
     domain = ufl.Mesh(basix.ufl.element(
         "Q", "hexahedron", order, gdim=3,
         lagrange_variant=basix.LagrangeVariant.equispaced, shape=(3,)))
@@ -156,6 +181,18 @@ def generate_box(comm: MPI.Intracomm, coords: list, n: list, order: int,
 
 def generate_sectant_cap(comm: MPI.Intracomm, r0: float, r1: float, n: list,
                          order: int):
+    """Generate a sectant cap which divides a spherical shell into six
+
+    Args:
+        comm: MPI communicator
+        r0: Inner radius
+        r1: Outer radius
+        n: Number of cells in each orthogonal direction of the reference box
+        order: Geometry order
+
+    Returns:
+        Mesh, facet labels, dictionary describing facet labels
+    """
     # reference coords to generate the cap
     coords = [[-1, -1, 0], [1, 1, 1]]
     mesh = generate_box(comm=comm, coords=coords, n=n, order=order)
