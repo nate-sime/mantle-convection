@@ -1,4 +1,7 @@
 import dataclasses
+import dolfinx
+import ufl
+
 
 @dataclasses.dataclass
 class SlabData:
@@ -78,3 +81,40 @@ class SlabData:
 
     def t_yr_to_ndim(self, t):
         return t * self.t_yr_to_s / self.t_r
+
+
+def create_viscosity_1():
+    def eta(u, T):
+        return 1
+    return eta
+
+
+def create_viscosity_2a(mesh):
+    R = dolfinx.fem.Constant(mesh, 8.3145)
+    Adiff = dolfinx.fem.Constant(mesh, 1.32043e9)
+    Ediff = dolfinx.fem.Constant(mesh, 335e3)
+    eta_max = dolfinx.fem.Constant(mesh, 1e26)
+    eta_scale = dolfinx.fem.Constant(mesh, 1e21)
+    def eta(u, T):
+        eta_diff = Adiff * ufl.exp(Ediff / (R * T))
+        eta_eff = (eta_max * eta_diff) / (eta_max + eta_diff)
+        return eta_eff / eta_scale
+    return eta
+
+
+def create_viscosity_2b(mesh, slab_data):
+    R = dolfinx.fem.Constant(mesh, 8.3145)
+    eta_max = dolfinx.fem.Constant(mesh, 1e26)
+    eta_scale = dolfinx.fem.Constant(mesh, 1e21)
+    Adisl = dolfinx.fem.Constant(mesh, 28968.6)
+    Edisl = dolfinx.fem.Constant(mesh, 540e3)
+    n_val = dolfinx.fem.Constant(mesh, 3.5)
+    n_exp = (1.0 - n_val) / n_val
+    def eta(u, T):
+        edot = ufl.sym(ufl.grad(u))
+        eII = slab_data.u_r / slab_data.h_r * ufl.sqrt(
+            0.5 * ufl.inner(edot, edot))
+        eta_disl = Adisl * ufl.exp(Edisl / (n_val * R * T)) * eII ** n_exp
+        eta_eff = (eta_max * eta_disl) / (eta_max + eta_disl)
+        return eta_eff / eta_scale
+    return eta
