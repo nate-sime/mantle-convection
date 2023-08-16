@@ -75,15 +75,20 @@ def gkb_wedge_flow_(X):
     xdist = X[0] - plate_thickness
     xdist[np.isclose(xdist, 0.0)] = np.finfo(np.float64).eps
     values = np.zeros((2, X.shape[1]), dtype=np.double)
-    alfa = arctan(1.0)
+    alpha = arctan(1.0)
     theta = arctan(depth / xdist)
-    vtheta = -((alfa - theta) * sin(theta) * sin(alfa) - (
-            alfa * theta * sin(alfa - theta))) / (
-                     alfa ** 2 - (sin(alfa)) ** 2)
-    vr = (((alfa - theta) * cos(theta) * sin(alfa)) - (
-            sin(alfa) * sin(theta)) - (alfa * sin(alfa - theta)) + (
-                  alfa * theta * cos(alfa - theta))) / (
-                 alfa ** 2 - (sin(alfa)) ** 2)
+    vtheta = (
+        -((alpha - theta) * sin(theta) * sin(alpha)
+          - (alpha * theta * sin(alpha - theta)))
+        / (alpha ** 2 - (sin(alpha)) ** 2)
+    )
+    vr = (
+        (((alpha - theta) * cos(theta) * sin(alpha))
+         - (sin(alpha) * sin(theta))
+         - (alpha * sin(alpha - theta))
+         + (alpha * theta * cos(alpha - theta)))
+        / (alpha ** 2 - (sin(alpha)) ** 2)
+    )
     values[0, :] = - (vtheta * sin(theta) - vr * cos(theta))
     values[1, :] = - (vtheta * cos(theta) + vr * sin(theta))
     values[0, np.isclose(depth, 0.0)] = 0.0
@@ -98,11 +103,11 @@ uh.interpolate(gkb_wedge_flow_)
 uh.x.scatter_forward()
 
 # -- Stokes system
-solve_flow = False
+solve_flow = True
 if solve_flow:
-    # eta = model.create_viscosity_1()
+    eta = model.create_viscosity_1()
     # eta = model.create_viscosity_2a(wedge_mesh)
-    eta = model.create_viscosity_2b(wedge_mesh, slab_data)
+    # eta = model.create_viscosity_2b(wedge_mesh, slab_data)
 
     def sigma(u, u0, T):
         return 2 * eta(u0, T) * ufl.sym(ufl.grad(u))

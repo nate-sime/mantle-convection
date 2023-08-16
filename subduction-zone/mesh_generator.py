@@ -26,7 +26,6 @@ def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):
 
     f_map = mesh.topology.index_map(fdim)
     all_facets = f_map.size_local + f_map.num_ghosts
-    # Create array with zeros for all facets that are not marked
     all_values = np.zeros(all_facets, dtype=np.int32)
     all_values[facet_tags.indices] = facet_tags.values
     c_to_f = mesh.topology.connectivity(tdim, fdim)
@@ -42,8 +41,10 @@ def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):
         child_facets = c_to_f_sub.links(i)
         for child, parent in zip(child_facets, parent_facets):
             sub_values[child] = all_values[parent]
-    sub_meshtag = dolfinx.mesh.meshtags(submesh, submesh.topology.dim-1, np.arange(
-        num_sub_facets, dtype=np.int32), sub_values)
+
+    sub_meshtag = dolfinx.mesh.meshtags(
+        submesh, submesh.topology.dim-1,
+        np.arange(num_sub_facets, dtype=np.int32), sub_values)
     return sub_meshtag
 
 def generate(comm: MPI.Intracomm):
@@ -121,8 +122,6 @@ def generate(comm: MPI.Intracomm):
                                     tag=Labels.plate_top)
 
         # -- Local refinement
-        # Find the corner curve
-        # tl_idx, br_idx = get_tl_br_idx(interface)
         def get_pts(dimtag):
             return gmsh.model.getBoundary([dimtag], recursive=True)
         corner_pt = set.intersection(
@@ -132,13 +131,12 @@ def generate(comm: MPI.Intracomm):
 
         corner_dist = gmsh.model.mesh.field.add("Distance")
         gmsh.model.mesh.field.setNumbers(corner_dist, "PointsList", [corner_pt[1]])
-        # gmsh.model.mesh.field.setNumbers(corner_dist, "Sampling", [200])
 
         L = depth
         D = depth
         xxx = 5.0
-        corner_res_min_max = (xxx, xxx)
-        interface_res_min_max = (xxx, xxx)
+        corner_res_min_max = (xxx/2.0, xxx)
+        interface_res_min_max = (xxx/2.0, xxx)
 
         corner_thres = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(corner_thres, "IField", corner_dist)

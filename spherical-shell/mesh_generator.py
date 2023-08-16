@@ -170,9 +170,6 @@ def generate_box(comm: MPI.Intracomm, coords: list, n: list, order: int,
                         for i in range(1, order):
                             cell.append(coord_to_vertex(i, j, k))
 
-            if order == 1:
-                cell_re = np.array([v0, v1, v2, v3, v4, v5, v6, v7])
-                assert np.all(np.array(cell) == cell_re)
             cells.append(cell)
 
     mesh = dolfinx.mesh.create_mesh(MPI.COMM_WORLD, cells, geom, domain)
@@ -223,7 +220,6 @@ def generate_sectant_cap(comm: MPI.Intracomm, r0: float, r1: float, n: list,
         x[:,1] = x[:,2] * np.tan(np.pi*xi[:,1] / 4.0)
         return x
 
-    # mesh.geometry.x[:] = sph2card(mesh.geometry.x)
     mesh.geometry.x[:] = mapoct(mesh.geometry.x)
     mesh.geometry.x[:] = mesh.geometry.x * r1
 
