@@ -1,4 +1,6 @@
 import dataclasses
+import numpy as np
+import scipy
 import dolfinx
 import ufl
 
@@ -118,3 +120,79 @@ def create_viscosity_2b(mesh, slab_data):
         eta_eff = (eta_max * eta_disl) / (eta_max + eta_disl)
         return eta_eff / eta_scale
     return eta
+
+
+def gkb_wedge_flow(x, x0):
+    """
+    Isoviscous wedge flow analytical solution from 'An Introduction to Fluid
+    Dynamics', G.K.Batchelor. Intended for 45 degree straight downward dipping
+    slab.
+
+    Args:
+        x: Spatial coordinate (x, y, 0.0)
+        x0: Spatial depth of corner point
+
+    """
+    from numpy import cos, sin, arctan
+    depth = -x0 - x[1]
+    xdist = x[0] - x0
+    xdist[np.isclose(xdist, 0.0)] = np.finfo(np.float64).eps
+    values = np.zeros((2, x.shape[1]), dtype=np.double)
+    alpha = arctan(1.0)
+    theta = arctan(depth / xdist)
+    vtheta = (
+        -((alpha - theta) * sin(theta) * sin(alpha)
+          - (alpha * theta * sin(alpha - theta)))
+        / (alpha ** 2 - (sin(alpha)) ** 2)
+    )
+    vr = (
+        (((alpha - theta) * cos(theta) * sin(alpha))
+         - (sin(alpha) * sin(theta))
+         - (alpha * sin(alpha - theta))
+         + (alpha * theta * cos(alpha - theta)))
+        / (alpha ** 2 - (sin(alpha)) ** 2)
+    )
+    values[0, :] = - (vtheta * sin(theta) - vr * cos(theta))
+    values[1, :] = - (vtheta * cos(theta) + vr * sin(theta))
+    values[0, np.isclose(depth, 0.0)] = 0.0
+    values[1, np.isclose(depth, 0.0)] = 0.0
+    return values
+
+
+def slab_inlet_temp(
+        x: np.ndarray, slab_data: SlabData, depth: callable) -> np.ndarray:
+    """
+    Inlet temperature on the slab as a function of depth
+
+    Args:
+        x: Spatial coordinate
+        slab_data: Slab model data
+        depth: Callable function returning depth as a function of x
+    """
+    vals = np.zeros((1, x.shape[1]))
+    Ts = slab_data.Ts
+    Twedge_in = slab_data.Twedge_in
+    z_scale = slab_data.h_r
+    kappa = slab_data.kappa_slab
+    t50 = slab_data.t50
+    vals[0] = Ts + (Twedge_in - Ts) * scipy.special.erf(
+        depth(x) * z_scale / (2.0 * np.sqrt(kappa * t50)))
+    return vals
+
+
+def overriding_side_temp(
+        x: np.ndarray, slab_data: SlabData, depth: callable) -> np.ndarray:
+    """
+    Inlet temperature on the wedge as a function of depth
+
+    Args:
+        x: Spatial coordinate
+        slab_data: Slab model data
+        depth: Callable function returning depth as a function of x
+    """
+    vals = np.zeros((1, x.shape[1]))
+    Ts = slab_data.Ts
+    T0 = slab_data.Twedge_in
+    Zplate = slab_data.plate_thickness
+    vals[0] = np.minimum(Ts - (T0 - Ts) / Zplate * (-depth(x)), T0)
+    return vals

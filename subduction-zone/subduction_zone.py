@@ -75,39 +75,10 @@ Th_to_Th_wedge_interp_data = \
 Th_wedge.interpolate(Th, nmm_interpolation_data=Th_to_Th_wedge_interp_data)
 Th_wedge.x.scatter_forward()
 
-# Isoviscous wedge flow analytical solution from 'An Introduction to Fluid
-# Dynamics', G.K.Batchelor
-def gkb_wedge_flow_(X):
-    from numpy import cos, sin, arctan
-    plate_thickness = slab_data.plate_thickness
-    depth = -plate_thickness - X[1]
-    xdist = X[0] - plate_thickness
-    xdist[np.isclose(xdist, 0.0)] = np.finfo(np.float64).eps
-    values = np.zeros((2, X.shape[1]), dtype=np.double)
-    alpha = arctan(1.0)
-    theta = arctan(depth / xdist)
-    vtheta = (
-        -((alpha - theta) * sin(theta) * sin(alpha)
-          - (alpha * theta * sin(alpha - theta)))
-        / (alpha ** 2 - (sin(alpha)) ** 2)
-    )
-    vr = (
-        (((alpha - theta) * cos(theta) * sin(alpha))
-         - (sin(alpha) * sin(theta))
-         - (alpha * sin(alpha - theta))
-         + (alpha * theta * cos(alpha - theta)))
-        / (alpha ** 2 - (sin(alpha)) ** 2)
-    )
-    values[0, :] = - (vtheta * sin(theta) - vr * cos(theta))
-    values[1, :] = - (vtheta * cos(theta) + vr * sin(theta))
-    values[0, np.isclose(depth, 0.0)] = 0.0
-    values[1, np.isclose(depth, 0.0)] = 0.0
-    return values
-
+# Useful initial guess for strainrate dependent viscosities
+gkb_wedge_flow_ = lambda x: model.gkb_wedge_flow(x, slab_data.plate_thickness)
 uh_full.interpolate(gkb_wedge_flow_, cells=wedge_cells)
 uh_full.x.scatter_forward()
-
-# Useful initial guess for strainrate dependent viscosities
 uh.interpolate(gkb_wedge_flow_)
 uh.x.scatter_forward()
 
@@ -199,28 +170,9 @@ L_T = dolfinx.fem.form(ufl.inner(Q_prime_constant, s) * ufl.dx)
 def depth(x):
     return -x[1]
 
-def slab_inet_temp_(x):
-    vals = np.zeros((1, x.shape[1]))
-    Ts = slab_data.Ts
-    Twedge_in = slab_data.Twedge_in
-    z_scale = slab_data.h_r
-    kappa = slab_data.kappa_slab
-    t50 = slab_data.t50
-    vals[0] = Ts + (Twedge_in - Ts) * scipy.special.erf(
-        depth(x) * z_scale / (2.0 * np.sqrt(kappa * t50)))
-    return vals
-
-def overriding_side_temp_(x):
-    vals = np.zeros((1, x.shape[1]))
-    Ts = slab_data.Ts
-    T0 = slab_data.Twedge_in
-    Zplate = slab_data.plate_thickness
-    vals[0] = np.minimum(Ts - (T0 - Ts) / Zplate * (-depth(x)), T0)
-    return vals
-
 inlet_facets = facet_tags.indices[facet_tags.values == Labels.slab_left]
 inlet_temp = dolfinx.fem.Function(S)
-inlet_temp.interpolate(slab_inet_temp_)
+inlet_temp.interpolate(lambda x: model.slab_inlet_temp(x, slab_data, depth))
 inlet_temp.x.scatter_forward()
 bc_inlet = dolfinx.fem.dirichletbc(
     inlet_temp, dolfinx.fem.locate_dofs_topological(
@@ -231,7 +183,8 @@ overriding_facets = facet_tags.indices[
     (facet_tags.values == Labels.plate_right) |
     (facet_tags.values == Labels.wedge_right)]
 overring_temp = dolfinx.fem.Function(S)
-overring_temp.interpolate(overriding_side_temp_)
+overring_temp.interpolate(
+    lambda x: model.overriding_side_temp(x, slab_data, depth))
 overring_temp.x.scatter_forward()
 bc_overriding = dolfinx.fem.dirichletbc(
     overring_temp, dolfinx.fem.locate_dofs_topological(
