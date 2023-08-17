@@ -8,6 +8,105 @@ import model
 
 Labels = mesh_generator.Labels
 
+
+def tangent_approximation(
+        V, mt: dolfinx.mesh.MeshTags, mt_id: int, tau: ufl.core.expr.Expr,
+        jit_options: dict = {}, form_compiler_options: dict = {}):
+    """
+    Approximate the facet normal by projecting it into the function space for a
+    set of facets.
+
+    Notes:
+        Adapted from `dolfinx_mpc.utils.facet_normal_approximation`.
+
+    Args:
+        V: The function space to project into
+        mt: The `dolfinx.mesh.MeshTagsMetaClass` containing facet markers
+        mt_id: The id for the facets in `mt` we want to represent the normal at
+    """
+    comm = V.mesh.comm
+    n = ufl.FacetNormal(V.mesh)
+    nh = dolfinx.fem.Function(V)
+    u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    ds = ufl.ds(domain=V.mesh, subdomain_data=mt, subdomain_id=mt_id)
+
+    if V.mesh.geometry.dim == 1:
+        raise ValueError("Tangent not defined for 1D problem")
+    elif V.mesh.geometry.dim == 2:
+        def cross_2d(u, v):
+            return u[0]*v[1] - u[1]*v[0]
+        b = -cross_2d(n, tau)
+        sd = ufl.as_vector((n[1]*b, -n[0]*b))
+        sd /= ufl.sqrt(ufl.dot(sd, sd))
+
+        a = ufl.inner(u, v) * ds
+        L = ufl.inner(sd, v) * ds
+    else:
+        sd = ufl.cross(n, -ufl.cross(n, tau))
+        sd /= ufl.sqrt(ufl.dot(sd, sd))
+
+        # d_x = ufl.as_vector((1, 0, 0))
+        # sd_x = ufl.cross(n, -ufl.cross(n, d_x))
+        # sd_x /= ufl.sqrt(ufl.dot(sd_x, sd_x))
+
+        # sd = ufl.conditional(
+        #     ufl.gt(sd[self.model.lwd[0]], 0), sd, sd_x)
+        a = ufl.inner(u, v) * ds
+        L = ufl.inner(sd, v) * ds
+
+    # Find all dofs that are not boundary dofs
+    imap = V.dofmap.index_map
+    all_blocks = np.arange(imap.size_local, dtype=np.int32)
+    top_blocks = dolfinx.fem.locate_dofs_topological(
+        V, V.mesh.topology.dim - 1, mt.find(mt_id))
+    deac_blocks = all_blocks[np.isin(all_blocks, top_blocks, invert=True)]
+
+    # Note there should be a better way to do this
+    # Create sparsity pattern only for constraint + bc
+    bilinear_form = dolfinx.fem.form(
+        a, jit_options=jit_options, form_compiler_options=form_compiler_options)
+    pattern = dolfinx.fem.create_sparsity_pattern(bilinear_form)
+    pattern.insert_diagonal(deac_blocks)
+    pattern.finalize()
+    u_0 = dolfinx.fem.Function(V)
+    u_0.vector.set(0)
+
+    bc_deac = dolfinx.fem.dirichletbc(u_0, deac_blocks)
+    A = dolfinx.cpp.la.petsc.create_matrix(comm, pattern)
+    A.zeroEntries()
+
+    # Assemble the matrix with all entries
+    form_coeffs = dolfinx.cpp.fem.pack_coefficients(bilinear_form._cpp_object)
+    form_consts = dolfinx.cpp.fem.pack_constants(bilinear_form._cpp_object)
+    dolfinx.cpp.fem.petsc.assemble_matrix(
+        A, bilinear_form._cpp_object, form_consts, form_coeffs,
+        [bc_deac._cpp_object])
+    if bilinear_form.function_spaces[0] is bilinear_form.function_spaces[1]:
+        A.assemblyBegin(PETSc.Mat.AssemblyType.FLUSH)
+        A.assemblyEnd(PETSc.Mat.AssemblyType.FLUSH)
+        dolfinx.cpp.fem.petsc.insert_diagonal(
+            A, bilinear_form.function_spaces[0], [bc_deac._cpp_object], 1.0)
+    A.assemble()
+    linear_form = dolfinx.fem.form(L, jit_options=jit_options,
+                            form_compiler_options=form_compiler_options)
+    b = dolfinx.fem.petsc.assemble_vector(linear_form)
+
+    dolfinx.fem.petsc.apply_lifting(b, [bilinear_form], [[bc_deac]])
+    b.ghostUpdate(
+        addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+    dolfinx.fem.petsc.set_bc(b, [bc_deac])
+
+    # Solve Linear problem
+    solver = PETSc.KSP().create(V.mesh.comm)
+    solver.setType("cg")
+    solver.rtol = 1e-8
+    solver.setOperators(A)
+    solver.solve(b, nh.vector)
+    nh.vector.ghostUpdate(
+        addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+    return nh
+
+
 class Stokes:
 
     def __init__(self, mesh, facet_tags, p_order):
