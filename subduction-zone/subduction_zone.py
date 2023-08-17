@@ -14,15 +14,17 @@ Labels = mesh_generator.Labels
 
 # Read meshes and partition over all processes
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_zone.xdmf", "r") as fi:
-    mesh = fi.read_mesh(ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+    mesh = fi.read_mesh(
+        name="zone", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
-    facet_tags = fi.read_meshtags(mesh, name="Facet tags")
-    cell_tags = fi.read_meshtags(mesh, name="Cell tags")
+    facet_tags = fi.read_meshtags(mesh, name="zone_facets")
+    cell_tags = fi.read_meshtags(mesh, name="zone_cells")
 
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_wedge.xdmf", "r") as fi:
-    wedge_mesh = fi.read_mesh(ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
-    wedge_mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
-    wedge_facet_tags = fi.read_meshtags(wedge_mesh, name="mesh_tags")
+    wedge_mesh = fi.read_mesh(
+        name="wedge", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+    wedge_mesh.topology.create_connectivity(wedge_mesh.topology.dim - 1, 0)
+    wedge_facet_tags = fi.read_meshtags(wedge_mesh, name="wedge_facets")
+
 
 # Function spaces for the Stokes problem in the wedge and the temperature
 # problem in the full domain

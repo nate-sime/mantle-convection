@@ -197,10 +197,31 @@ def generate(comm: MPI.Intracomm):
     gmsh.finalize()
     return mesh, cell_tags, facet_tags
 
+def extract_submesh_and_transfer_facets(mesh, facet_tags, indices):
+    sub_mesh, entity_map, _, _ = dolfinx.mesh.create_submesh(
+        mesh, mesh.topology.dim, indices)
+    sub_mesh.topology.create_connectivity(
+        sub_mesh.topology.dim - 1, sub_mesh.topology.dim)
+    sub_facet_tags = transfer_facet_tags(
+        mesh, facet_tags, entity_map, sub_mesh)
+    return sub_mesh, sub_facet_tags
+
 
 if __name__ == "__main__":
     from mpi4py import MPI
     mesh, cell_tags, facet_tags = generate(MPI.COMM_WORLD)
+    cell_tags.name = "zone_cells"
+    facet_tags.name = "zone_facets"
+    mesh.name = "zone"
+
+    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_facets(
+        mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.wedge])
+    wedge_facet_tags.name = "wedge_facets"
+    wedge_mesh.name = "wedge"
+    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_facets(
+        mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.slab])
+    slab_facet_tags.name = "slab_facets"
+    slab_mesh.name = "slab"
 
     with dolfinx.io.XDMFFile(mesh.comm, "subduction_zone.xdmf", "w") as fi:
         fi.write_mesh(mesh)
@@ -211,16 +232,12 @@ if __name__ == "__main__":
             facet_tags, mesh.geometry,
             geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh.name}']/Geometry")
 
-    wedge_mesh, entity_map, _, _ = dolfinx.mesh.create_submesh(
-        mesh, mesh.topology.dim,
-        cell_tags.indices[cell_tags.values == Labels.wedge])
-    wedge_mesh.topology.create_connectivity(
-        wedge_mesh.topology.dim - 1, wedge_mesh.topology.dim)
-    wedge_facet_tags = transfer_facet_tags(
-        mesh, facet_tags, entity_map, wedge_mesh)
-
-    with dolfinx.io.XDMFFile(wedge_mesh.comm, "subduction_wedge.xdmf", "w") as fi:
         fi.write_mesh(wedge_mesh)
         fi.write_meshtags(
             wedge_facet_tags, wedge_mesh.geometry,
             geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedge_mesh.name}']/Geometry")
+
+        fi.write_mesh(slab_mesh)
+        fi.write_meshtags(
+            slab_facet_tags, slab_mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{slab_mesh.name}']/Geometry")
