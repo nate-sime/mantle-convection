@@ -11,14 +11,21 @@ import model
 
 slab_data = model.SlabData()
 Labels = mesh_generator.Labels
-mesh, cell_tags, facet_tags = mesh_generator.generate(MPI.COMM_WORLD)
 
-wedge_mesh, entity_map, _, _ = dolfinx.mesh.create_submesh(
-    mesh, mesh.topology.dim,
-    cell_tags.indices[cell_tags.values == Labels.wedge])
-wedge_facet_tags = mesh_generator.transfer_facet_tags(
-    mesh, facet_tags, entity_map, wedge_mesh)
+# Read meshes and partition over all processes
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_zone.xdmf", "r") as fi:
+    mesh = fi.read_mesh(ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
+    facet_tags = fi.read_meshtags(mesh, name="Facet tags")
+    cell_tags = fi.read_meshtags(mesh, name="Cell tags")
 
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_wedge.xdmf", "r") as fi:
+    wedge_mesh = fi.read_mesh(ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+    wedge_mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
+    wedge_facet_tags = fi.read_meshtags(wedge_mesh, name="mesh_tags")
+
+# Function spaces for the Stokes problem in the wedge and the temperature
+# problem in the full domain
 p_order = 2
 V = dolfinx.fem.VectorFunctionSpace(wedge_mesh, ("CG", p_order))
 Q = dolfinx.fem.FunctionSpace(wedge_mesh, ("CG", p_order-1))
@@ -39,7 +46,7 @@ Th.interpolate(lambda x: np.full_like(x[0], slab_data.Ts))
 Th.name = "T"
 uh.name = "u"
 
-# interpolation of the velocity on the full mesh
+# Interpolation data to transfer the velocity on wedge to the full mesh
 V_full = dolfinx.fem.VectorFunctionSpace(mesh, ("DG", p_order))
 uh_full = dolfinx.fem.Function(V_full, name="u_full")
 wedge_cells = cell_tags.indices[cell_tags.values == Labels.wedge]
@@ -66,8 +73,8 @@ Th_to_Th_wedge_interp_data = \
 Th_wedge.interpolate(Th, nmm_interpolation_data=Th_to_Th_wedge_interp_data)
 Th_wedge.x.scatter_forward()
 
-# Converted from the implementation by C. R. Wilson
-# https://github.com/TerraFERMA/benchmarks/blob/master/benchmarks/vankeken/1a/vankeken.tfml#L233-L250
+# Isoviscous wedge flow analytical solution from 'An Introduction to Fluid
+# Dynamics', G.K.Batchelor
 def gkb_wedge_flow_(X):
     from numpy import cos, sin, arctan
     plate_thickness = slab_data.plate_thickness

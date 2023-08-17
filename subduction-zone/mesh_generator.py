@@ -21,12 +21,28 @@ class Labels(enum.IntEnum):
 
 
 def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):
+    """
+    Transfer the facets_tags from mesh to submesh
+
+    Notes:
+        All values in the facet_tags are assumed positive
+
+    Args:
+        mesh: Original mesh
+        facet_tags: Facet tags defined on original mesh
+        entity_map: Relationship from submesh child entity to parent mesh
+         entity
+        submesh: The submesh of the original mesh
+
+    Returns:
+        Facet tags transferred to the submesh
+    """
     tdim = mesh.topology.dim
     fdim = mesh.topology.dim - 1
 
     f_map = mesh.topology.index_map(fdim)
     all_facets = f_map.size_local + f_map.num_ghosts
-    all_values = np.zeros(all_facets, dtype=np.int32)
+    all_values = np.full(all_facets, -1, dtype=np.int32)
     all_values[facet_tags.indices] = facet_tags.values
     c_to_f = mesh.topology.connectivity(tdim, fdim)
 
@@ -42,9 +58,13 @@ def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):
         for child, parent in zip(child_facets, parent_facets):
             sub_values[child] = all_values[parent]
 
+    valid_entries = ~(sub_values == -1)
+    sub_indices = np.arange(num_sub_facets, dtype=np.int32)[valid_entries]
+    sub_values = sub_values[valid_entries]
+
     sub_meshtag = dolfinx.mesh.meshtags(
         submesh, submesh.topology.dim-1,
-        np.arange(num_sub_facets, dtype=np.int32), sub_values)
+        sub_indices, sub_values)
     return sub_meshtag
 
 def generate(comm: MPI.Intracomm):
@@ -174,11 +194,33 @@ def generate(comm: MPI.Intracomm):
     mesh, cell_tags, facet_tags = dolfinx.io.gmshio.model_to_mesh(
         gmsh.model, MPI.COMM_WORLD, rank=0, gdim=2, partitioner=partitioner)
 
-    # import febug
-    # febug.plot_mesh(mesh).show()
+    gmsh.finalize()
     return mesh, cell_tags, facet_tags
 
 
 if __name__ == "__main__":
     from mpi4py import MPI
-    generate(MPI.COMM_WORLD)
+    mesh, cell_tags, facet_tags = generate(MPI.COMM_WORLD)
+
+    with dolfinx.io.XDMFFile(mesh.comm, "subduction_zone.xdmf", "w") as fi:
+        fi.write_mesh(mesh)
+        fi.write_meshtags(
+            cell_tags, mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh.name}']/Geometry")
+        fi.write_meshtags(
+            facet_tags, mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh.name}']/Geometry")
+
+    wedge_mesh, entity_map, _, _ = dolfinx.mesh.create_submesh(
+        mesh, mesh.topology.dim,
+        cell_tags.indices[cell_tags.values == Labels.wedge])
+    wedge_mesh.topology.create_connectivity(
+        wedge_mesh.topology.dim - 1, wedge_mesh.topology.dim)
+    wedge_facet_tags = transfer_facet_tags(
+        mesh, facet_tags, entity_map, wedge_mesh)
+
+    with dolfinx.io.XDMFFile(wedge_mesh.comm, "subduction_wedge.xdmf", "w") as fi:
+        fi.write_mesh(wedge_mesh)
+        fi.write_meshtags(
+            wedge_facet_tags, wedge_mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedge_mesh.name}']/Geometry")
