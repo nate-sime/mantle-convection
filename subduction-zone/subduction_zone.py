@@ -43,16 +43,14 @@ stokes_problem_wedge = solvers.Stokes(wedge_mesh, wedge_facet_tags, p_order)
 stokes_problem_slab = solvers.Stokes(slab_mesh, slab_facet_tags, p_order)
 heat_problem = solvers.Heat(mesh, facet_tags, p_order)
 
-if mesh.comm.rank == 0:
-    wedge_dofs = stokes_problem_wedge.V.dofmap.index_map.size_global\
-                 * stokes_problem_wedge.V.dofmap.index_map_bs
-    slab_dofs = stokes_problem_slab.V.dofmap.index_map.size_global\
-                * stokes_problem_slab.V.dofmap.index_map_bs
-    print0(f"Wedge Velocity DoFs: {wedge_dofs}")
-    print0(f"Wedge Pressure DoFs: {stokes_problem_wedge.Q.dofmap.index_map.size_global}")
-    print0(f"Slab Velocity DoFs: {slab_dofs}")
-    print0(f"Slab Pressure DoFs: {stokes_problem_slab.Q.dofmap.index_map.size_global}")
-    print0(f"Temperature DoFs: {heat_problem.S.dofmap.index_map.size_global}")
+def stokes_problem_dof_report(problem):
+    u_dofs = problem.V.dofmap.index_map.size_global \
+                 * problem.V.dofmap.index_map_bs
+    p_dofs = problem.Q.dofmap.index_map.size_global
+    return f"velocity DoFs: {u_dofs:,} pressure DoFs: {p_dofs:,}"
+print0(f"Wedge {stokes_problem_dof_report(stokes_problem_wedge)}")
+print0(f"Slab {stokes_problem_dof_report(stokes_problem_slab)}")
+print0(f"Temperature DoFs: {heat_problem.S.dofmap.index_map.size_global:,}")
 
 # Initialise solution variables
 uh_wedge = dolfinx.fem.Function(stokes_problem_wedge.V)
@@ -110,9 +108,10 @@ slab_tangent_slab = solvers.tangent_approximation(
     stokes_problem_slab.V, slab_facet_tags, Labels.slab_wedge, z_hat)
 slab_tangent_slab.x.scatter_forward()
 
-eta = model.create_viscosity_1()
-stokes_problem_wedge.init(uh_wedge, Th_wedge, eta, slab_tangent_wedge)
-stokes_problem_slab.init(uh_slab, Th_slab, eta, slab_tangent_slab)
+eta_wedge = model.create_viscosity_1()
+eta_slab = model.create_viscosity_1()
+stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge)
+stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab)
 heat_problem.init(uh_full, slab_data)
 
 # Useful initial guess for strainrate dependent viscosities
@@ -128,7 +127,7 @@ Th0.vector.array = Th.vector.array_r
 Th0.x.scatter_forward()
 
 solve_flow = True
-for picard_it in range(max_picard_its := 1):
+for picard_it in range(max_picard_its := 25):
     # Solve Stokes and interpolate velocity approximation into full geometry
     if solve_flow:
         print0("Solving wedge problem")
