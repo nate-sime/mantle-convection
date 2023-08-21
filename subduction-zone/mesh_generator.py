@@ -1,4 +1,8 @@
 import enum
+import typing
+
+import geomdl
+import geomdl.abstract
 import dolfinx
 from mpi4py import MPI
 import gmsh
@@ -67,31 +71,56 @@ def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):
         sub_indices, sub_values)
     return sub_meshtag
 
-def generate(comm: MPI.Intracomm):
+
+def generate(comm: MPI.Intracomm,
+             slab_x: typing.Iterable[float],
+             slab_y: typing.Iterable[float],
+             wedge_x_buffer: float,
+             plate_y: float,
+             corner_resolution: float,
+             surface_resolution: float,
+             bulk_resolution: float,
+             slab_spline_degree: int = None,
+             slab_spline: geomdl.abstract.Curve=None):
     gmsh.initialize()
-
-    slab_depth = 50.0
-    depth = 600.0
-    dx = 60.0
-
     if comm.rank == 0:
+        if slab_spline_degree is None:
+            slab_spline_degree = 3
+
+        if slab_spline is None:
+            import geomdl.fitting
+            slab_spline = geomdl.fitting.interpolate_curve(
+                list(zip(slab_x, slab_y)), degree=slab_spline_degree)
+
+        slab_depth = slab_y.min()
+        slab_width = slab_x.max()
+        slab_x0 = [slab_x.min(), slab_y.max()]
+
         gmsh.model.add("subduction")
 
         # -- Geometry definition
-        domain = gmsh.model.occ.addRectangle(0.0, 0.0, 0.0, depth + dx, -depth)
-        tl = gmsh.model.occ.addPoint(0.0, 0.0, 0.0)
-        br = gmsh.model.occ.addPoint(depth, -depth, 0.0)
-        interface = gmsh.model.occ.addLine(tl, br)
+        domain = gmsh.model.occ.addRectangle(
+            slab_x0[0], slab_x0[1], 0.0,
+            slab_width + wedge_x_buffer, slab_depth)
+
+        cpts = [gmsh.model.occ.addPoint(*pt, 0.0) for pt in slab_spline.ctrlpts]
+        interface = gmsh.model.occ.addBSpline(cpts, degree=slab_spline.degree)
 
         gmsh.model.occ.fragment([(2, domain)], [(1, interface)],
                                 removeObject=True, removeTool=True)
         gmsh.model.occ.synchronize()
 
-        l = gmsh.model.occ.addPoint(slab_depth, -slab_depth, 0.0)
-        r = gmsh.model.occ.addPoint(depth + dx, -slab_depth, 0.0)
+        l = gmsh.model.occ.addPoint(slab_x0[0], plate_y, 0.0)
+        r = gmsh.model.occ.addPoint(slab_width + wedge_x_buffer, plate_y, 0.0)
         plate_iface = gmsh.model.occ.addLine(l, r)
-        gmsh.model.occ.fragment(gmsh.model.occ.getEntities(2), [(1, plate_iface)],
+
+        vols = gmsh.model.occ.getEntities(2)
+        coms = np.array([gmsh.model.occ.getCenterOfMass(*v) for v in vols])
+        wedge = vols[np.argmax(coms[:,1])]
+
+        gmsh.model.occ.fragment([wedge], [(1, plate_iface)],
                                 removeObject=True, removeTool=True)
+        gmsh.model.occ.healShapes()
         gmsh.model.occ.synchronize()
 
         # -- Labelling
@@ -152,11 +181,10 @@ def generate(comm: MPI.Intracomm):
         corner_dist = gmsh.model.mesh.field.add("Distance")
         gmsh.model.mesh.field.setNumbers(corner_dist, "PointsList", [corner_pt[1]])
 
-        L = depth
-        D = depth
-        xxx = 5.0
-        corner_res_min_max = (xxx/2.0, xxx)
-        interface_res_min_max = (xxx/2.0, xxx)
+        L = abs(slab_width)
+        D = abs(slab_depth)
+        corner_res_min_max = (corner_resolution, bulk_resolution)
+        interface_res_min_max = (surface_resolution, bulk_resolution)
 
         corner_thres = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(corner_thres, "IField", corner_dist)
@@ -164,8 +192,8 @@ def generate(comm: MPI.Intracomm):
             corner_thres, "LcMin", corner_res_min_max[0])
         gmsh.model.mesh.field.setNumber(
             corner_thres, "LcMax", corner_res_min_max[1])
-        gmsh.model.mesh.field.setNumber(corner_thres, "DistMin", 0.1*D)
-        gmsh.model.mesh.field.setNumber(corner_thres, "DistMax", 0.2*D)
+        gmsh.model.mesh.field.setNumber(corner_thres, "DistMin", 0.05*D)
+        gmsh.model.mesh.field.setNumber(corner_thres, "DistMax", 0.1*D)
 
         # Other surfaces to refine
         interface_dist = gmsh.model.mesh.field.add("Distance")
@@ -209,7 +237,20 @@ def extract_submesh_and_transfer_facets(mesh, facet_tags, indices):
 
 if __name__ == "__main__":
     from mpi4py import MPI
-    mesh, cell_tags, facet_tags = generate(MPI.COMM_WORLD)
+
+    depth = 600.0
+    x_slab = np.linspace(0, depth, 10)
+    y_slab = -x_slab
+    wedge_x_buffer = 50.0
+    plate_y = -50.0
+    bulk_resolution = 25.0
+    corner_resolution = 2.0
+    surface_resolution = 5.0
+
+    mesh, cell_tags, facet_tags = generate(
+        MPI.COMM_WORLD, x_slab, y_slab, wedge_x_buffer, plate_y,
+        corner_resolution, surface_resolution, bulk_resolution,
+        slab_spline_degree=2)
     cell_tags.name = "zone_cells"
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
