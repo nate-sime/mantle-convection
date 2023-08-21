@@ -1,3 +1,5 @@
+import typing
+
 from petsc4py import PETSc
 import numpy as np
 import dolfinx
@@ -10,7 +12,8 @@ Labels = mesh_generator.Labels
 
 
 def tangent_approximation(
-        V, mt: dolfinx.mesh.MeshTags, mt_id: int, tau: ufl.core.expr.Expr,
+        V, mt: dolfinx.mesh.MeshTags, mt_id: int | typing.Iterable[int],
+        tau: ufl.core.expr.Expr,
         jit_options: dict = {}, form_compiler_options: dict = {}):
     """
     Approximate the facet normal by projecting it into the function space for a
@@ -25,10 +28,11 @@ def tangent_approximation(
         mt_id: The id for the facets in `mt` we want to represent the normal at
     """
     comm = V.mesh.comm
+    mt_id_tuple = (mt_id,) if not hasattr(mt_id, "__len__") else tuple(mt_id)
     n = ufl.FacetNormal(V.mesh)
     nh = dolfinx.fem.Function(V)
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-    ds = ufl.ds(domain=V.mesh, subdomain_data=mt, subdomain_id=mt_id)
+    ds = ufl.ds(domain=V.mesh, subdomain_data=mt, subdomain_id=mt_id_tuple)
 
     if V.mesh.geometry.dim == 1:
         raise ValueError("Tangent not defined for 1D problem")
@@ -58,7 +62,7 @@ def tangent_approximation(
     imap = V.dofmap.index_map
     all_blocks = np.arange(imap.size_local, dtype=np.int32)
     top_blocks = dolfinx.fem.locate_dofs_topological(
-        V, V.mesh.topology.dim - 1, mt.find(mt_id))
+        V, V.mesh.topology.dim - 1, mt.indices[np.isin(mt.values, mt_id_tuple)])
     deac_blocks = all_blocks[np.isin(all_blocks, top_blocks, invert=True)]
 
     # Note there should be a better way to do this
@@ -127,7 +131,6 @@ class Stokes:
         def sigma(u, u0, T):
             return 2 * eta(u0, T) * ufl.sym(ufl.grad(u))
 
-
         a_u00 = ufl.inner(sigma(u, uh, Th), ufl.sym(ufl.grad(v))) * ufl.dx
         a_u01 = - ufl.inner(p, ufl.div(v)) * ufl.dx
         a_u10 = - ufl.inner(q, ufl.div(u)) * ufl.dx
@@ -140,8 +143,8 @@ class Stokes:
 
         f_u = dolfinx.fem.Constant(mesh, [0.0] * mesh.geometry.dim)
         f_p = dolfinx.fem.Constant(mesh, 0.0)
-        L_u = dolfinx.fem.form([ufl.inner(f_u, v) * ufl.dx, ufl.inner(f_p, q) * ufl.dx])
-
+        L_u = dolfinx.fem.form(
+            [ufl.inner(f_u, v) * ufl.dx, ufl.inner(f_p, q) * ufl.dx])
 
         # -- Stokes BCs
         noslip = np.zeros(mesh.geometry.dim, dtype=PETSc.ScalarType)
@@ -151,7 +154,8 @@ class Stokes:
             noslip, dolfinx.fem.locate_dofs_topological(
                 V, mesh.topology.dim-1, noslip_facets), V)
 
-        facets = facet_tags.indices[facet_tags.values == Labels.slab_wedge]
+        facets = facet_tags.indices[
+            np.isin(facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))]
         assert isinstance(slab_velocity, (np.ndarray, dolfinx.fem.Function))
         if isinstance(slab_velocity, np.ndarray):
             bc_slab = dolfinx.fem.dirichletbc(
@@ -161,7 +165,6 @@ class Stokes:
             bc_slab = dolfinx.fem.dirichletbc(
                 slab_velocity, dolfinx.fem.locate_dofs_topological(
                     V, mesh.topology.dim-1, facets))
-
 
         # The plate BC goes last such that all dofs on the overriding plate
         # have priority and therefore zero flow
