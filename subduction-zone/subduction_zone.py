@@ -99,14 +99,14 @@ Th_full2slab_interp_data = \
 Th_slab.interpolate(Th, nmm_interpolation_data=Th_full2slab_interp_data)
 Th_slab.x.scatter_forward()
 
-# Initialise the solvers generating underlying matrices, vectors and KSPs
-# import dolfinx_mpc.utils
+# Initialise the solvers generating underlying matrices, vectors and KSPs.
+# The tangential approximation updates ghosts after solving the projection
 z_hat = ufl.as_vector((0, -1))
 slab_tangent_wedge = solvers.tangent_approximation(
     stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge, z_hat)
 slab_tangent_slab = solvers.tangent_approximation(
-    stokes_problem_slab.V, slab_facet_tags, Labels.slab_wedge, z_hat)
-slab_tangent_slab.x.scatter_forward()
+    stokes_problem_slab.V, slab_facet_tags,
+    [Labels.slab_wedge, Labels.slab_plate], z_hat)
 
 eta_wedge = model.create_viscosity_1()
 eta_slab = model.create_viscosity_1()
