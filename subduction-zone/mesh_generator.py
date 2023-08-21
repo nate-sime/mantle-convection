@@ -80,6 +80,7 @@ def generate(comm: MPI.Intracomm,
              corner_resolution: float,
              surface_resolution: float,
              bulk_resolution: float,
+             couple_y: float = None,
              slab_spline_degree: int = None,
              slab_spline: geomdl.abstract.Curve=None):
     gmsh.initialize()
@@ -110,18 +111,30 @@ def generate(comm: MPI.Intracomm,
                                 removeObject=True, removeTool=True)
         gmsh.model.occ.synchronize()
 
-        l = gmsh.model.occ.addPoint(slab_x0[0], plate_y, 0.0)
-        r = gmsh.model.occ.addPoint(slab_width + wedge_x_buffer, plate_y, 0.0)
-        plate_iface = gmsh.model.occ.addLine(l, r)
+        def fragment_wedge_with_horizontal_line(lines):
+            if not hasattr(lines, "__len__"):
+                lines = (lines,)
+            vols = gmsh.model.occ.getEntities(2)
+            coms = np.array([gmsh.model.occ.getCenterOfMass(*v) for v in vols])
+            wedge = vols[np.argmax(coms[:,1])]
+            gmsh.model.occ.fragment([wedge], [(1, li) for li in lines],
+                                    removeObject=True, removeTool=True)
+            gmsh.model.occ.healShapes()
+            gmsh.model.occ.synchronize()
 
-        vols = gmsh.model.occ.getEntities(2)
-        coms = np.array([gmsh.model.occ.getCenterOfMass(*v) for v in vols])
-        wedge = vols[np.argmax(coms[:,1])]
+        plate_iface = gmsh.model.occ.addLine(
+            gmsh.model.occ.addPoint(slab_x0[0], plate_y, 0.0),
+            gmsh.model.occ.addPoint(slab_width + wedge_x_buffer, plate_y, 0.0))
+        lines_to_fragment = [plate_iface]
 
-        gmsh.model.occ.fragment([wedge], [(1, plate_iface)],
-                                removeObject=True, removeTool=True)
-        gmsh.model.occ.healShapes()
-        gmsh.model.occ.synchronize()
+        if couple_y is not None:
+            assert couple_y < plate_y
+            couple_line = gmsh.model.occ.addLine(
+                gmsh.model.occ.addPoint(slab_x0[0], couple_y, 0.0),
+                gmsh.model.occ.addPoint(slab_width + wedge_x_buffer, couple_y, 0.0))
+            lines_to_fragment.append(couple_line)
+
+        fragment_wedge_with_horizontal_line(lines_to_fragment)
 
         # -- Labelling
         # Volume labels
@@ -129,16 +142,18 @@ def generate(comm: MPI.Intracomm,
         coms = np.array([gmsh.model.occ.getCenterOfMass(*v) for v in vols])
         plate = vols[np.argmax(coms[:,1])]
         slab = vols[np.argmin(coms[:,0])]
-        wedge = vols[np.argmax(coms[:,0])]
+        wedge = list(set(vols) - set([plate, slab]))
 
         gmsh.model.addPhysicalGroup(2, [plate[1]], tag=Labels.plate)
         gmsh.model.addPhysicalGroup(2, [slab[1]], tag=Labels.slab)
-        gmsh.model.addPhysicalGroup(2, [wedge[1]], tag=Labels.wedge)
+        gmsh.model.addPhysicalGroup(2, [w[1] for w in wedge], tag=Labels.wedge)
 
         # Domain interface facet labels
         plate_facets = gmsh.model.getAdjacencies(plate[0], plate[1])[1]
         slab_facets = gmsh.model.getAdjacencies(slab[0], slab[1])[1]
-        wedge_facets = gmsh.model.getAdjacencies(wedge[0], wedge[1])[1]
+        wedge_facets = np.fromiter(set(sum((
+            gmsh.model.getAdjacencies(2, w[1])[1].tolist() for w in wedge), [])
+        ), dtype=np.int32)
 
         slab_plate = np.intersect1d(slab_facets, plate_facets)
         slab_wedge = np.intersect1d(slab_facets, wedge_facets)
@@ -160,7 +175,7 @@ def generate(comm: MPI.Intracomm,
         gmsh.model.addPhysicalGroup(1, [slab_facets[np.argmin(coms_slab[:,1])]],
                                     tag=Labels.slab_bottom)
         # wedge
-        gmsh.model.addPhysicalGroup(1, [wedge_facets[np.argmax(coms_wedge[:,0])]],
+        gmsh.model.addPhysicalGroup(1, wedge_facets[np.isclose(coms_wedge[:,0], slab_width + wedge_x_buffer)],
                                     tag=Labels.wedge_right)
         gmsh.model.addPhysicalGroup(1, [wedge_facets[np.argmin(coms_wedge[:,1])]],
                                     tag=Labels.wedge_bottom)
@@ -172,11 +187,24 @@ def generate(comm: MPI.Intracomm,
 
         # -- Local refinement
         def get_pts(dimtag):
-            return gmsh.model.getBoundary([dimtag], recursive=True)
-        corner_pt = set.intersection(
-            *map(lambda x: set(get_pts(x)), (plate, slab, wedge)))
-        assert len(corner_pt) == 1
-        corner_pt = corner_pt.pop()
+            if isinstance(dimtag, tuple):
+                dimtag = [dimtag]
+            return gmsh.model.getBoundary(dimtag, recursive=True)
+
+        # Apply local refinement to the coupling point if it exists, otherwise
+        # the wedge corner
+        if couple_y is None:
+            corner_pt = set.intersection(
+                *map(lambda x: set(get_pts(x)), (plate, slab, wedge)))
+            assert len(corner_pt) == 1
+            corner_pt = corner_pt.pop()
+        else:
+            corner_pt = list(set.intersection(
+                *map(lambda x: set(get_pts(x)), (slab, *(w for w in wedge)))))
+            corner_coords = np.array(
+                [gmsh.model.getValue(0, pt[1], []) for pt in corner_pt],
+                dtype=np.double)
+            corner_pt = corner_pt[np.argmin(np.abs(corner_coords[:,1] - couple_y))]
 
         corner_dist = gmsh.model.mesh.field.add("Distance")
         gmsh.model.mesh.field.setNumbers(corner_dist, "PointsList", [corner_pt[1]])
@@ -243,6 +271,7 @@ if __name__ == "__main__":
     y_slab = -x_slab
     wedge_x_buffer = 50.0
     plate_y = -50.0
+    couple_y = plate_y - 20.0
     bulk_resolution = 25.0
     corner_resolution = 2.0
     surface_resolution = 5.0
@@ -250,7 +279,7 @@ if __name__ == "__main__":
     mesh, cell_tags, facet_tags = generate(
         MPI.COMM_WORLD, x_slab, y_slab, wedge_x_buffer, plate_y,
         corner_resolution, surface_resolution, bulk_resolution,
-        slab_spline_degree=2)
+        couple_y=couple_y, slab_spline_degree=3)
     cell_tags.name = "zone_cells"
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
