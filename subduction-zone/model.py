@@ -137,7 +137,7 @@ def gkb_wedge_flow(x, x0):
     depth = -x0 - x[1]
     xdist = x[0] - x0
     xdist[np.isclose(xdist, 0.0)] = np.finfo(np.float64).eps
-    values = np.zeros((2, x.shape[1]), dtype=np.double)
+    values = np.zeros((2, x.shape[1]), dtype=np.float64)
     alpha = arctan(1.0)
     theta = arctan(depth / xdist)
     vtheta = (

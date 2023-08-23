@@ -14,6 +14,8 @@ Labels = mesh_generator.Labels
 def tangent_approximation(
         V, mt: dolfinx.mesh.MeshTags, mt_id: int | typing.Iterable[int],
         tau: ufl.core.expr.Expr,
+        y_plate: typing.Optional[float] = None,
+        y_couple: typing.Optional[float] = None,
         jit_options: dict = {}, form_compiler_options: dict = {}):
     """
     Approximate the facet normal by projecting it into the function space for a
@@ -42,9 +44,6 @@ def tangent_approximation(
         b = -cross_2d(n, tau)
         sd = ufl.as_vector((n[1]*b, -n[0]*b))
         sd /= ufl.sqrt(ufl.dot(sd, sd))
-
-        a = ufl.inner(u, v) * ds
-        L = ufl.inner(sd, v) * ds
     else:
         sd = ufl.cross(n, -ufl.cross(n, tau))
         sd /= ufl.sqrt(ufl.dot(sd, sd))
@@ -55,8 +54,14 @@ def tangent_approximation(
 
         # sd = ufl.conditional(
         #     ufl.gt(sd[self.model.lwd[0]], 0), sd, sd_x)
-        a = ufl.inner(u, v) * ds
-        L = ufl.inner(sd, v) * ds
+
+    if y_plate is not None and y_couple is not None:
+        x = ufl.SpatialCoordinate(V.mesh)
+        sd *= ufl.max_value(
+            0.0, ufl.min_value(1.0, (x[1] - y_plate) / (y_couple - y_plate)))
+
+    a = ufl.inner(u, v) * ds
+    L = ufl.inner(sd, v) * ds
 
     # Find all dofs that are not boundary dofs
     imap = V.dofmap.index_map
