@@ -48,6 +48,7 @@ def stokes_problem_dof_report(problem):
                  * problem.V.dofmap.index_map_bs
     p_dofs = problem.Q.dofmap.index_map.size_global
     return f"velocity DoFs: {u_dofs:,} pressure DoFs: {p_dofs:,}"
+
 print0(f"Wedge {stokes_problem_dof_report(stokes_problem_wedge)}")
 print0(f"Slab {stokes_problem_dof_report(stokes_problem_slab)}")
 print0(f"Temperature DoFs: {heat_problem.S.dofmap.index_map.size_global:,}")
@@ -60,7 +61,7 @@ Th.interpolate(lambda x: np.full_like(x[0], slab_data.Ts))
 Th.name = "T"
 uh_wedge.name = "u"
 
-# Interpolation data to transfer the velocity on wedge to the full mesh
+# Interpolation data to transfer the velocity on wedge/slab to the full mesh
 V_full = dolfinx.fem.VectorFunctionSpace(mesh, ("DG", p_order))
 uh_full = dolfinx.fem.Function(V_full, name="u_full")
 
@@ -100,10 +101,19 @@ Th_slab.interpolate(Th, nmm_interpolation_data=Th_full2slab_interp_data)
 Th_slab.x.scatter_forward()
 
 # Initialise the solvers generating underlying matrices, vectors and KSPs.
-# The tangential approximation updates ghosts after solving the projection
+# The tangential velocity approximation for the BCs updates ghosts after
+# solving the projection inside solvers.tangent_approximation
+if use_coupling_depth := False:
+    plate_y = dolfinx.fem.Constant(
+        wedge_mesh, np.array(-50.0, dtype=np.float64))
+    couple_y = dolfinx.fem.Constant(
+        wedge_mesh, np.array(plate_y - 10.0, dtype=np.float64))
+else:
+    plate_y, couple_y = None, None
 z_hat = ufl.as_vector((0, -1))
 slab_tangent_wedge = solvers.tangent_approximation(
-    stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge, z_hat)
+    stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge, z_hat,
+    y_plate=plate_y, y_couple=couple_y)
 slab_tangent_slab = solvers.tangent_approximation(
     stokes_problem_slab.V, slab_facet_tags,
     [Labels.slab_wedge, Labels.slab_plate], z_hat)

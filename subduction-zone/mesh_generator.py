@@ -73,8 +73,7 @@ def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):
 
 
 def generate(comm: MPI.Intracomm,
-             slab_x: typing.Iterable[float],
-             slab_y: typing.Iterable[float],
+             slab_xy: typing.Iterable[float],
              wedge_x_buffer: float,
              plate_y: float,
              corner_resolution: float,
@@ -82,20 +81,24 @@ def generate(comm: MPI.Intracomm,
              bulk_resolution: float,
              couple_y: float = None,
              slab_spline_degree: int = None,
-             slab_spline: geomdl.abstract.Curve=None):
+             slab_spline: geomdl.abstract.Curve = None,
+             geom_degree: int = 1):
     gmsh.initialize()
     if comm.rank == 0:
         if slab_spline_degree is None:
             slab_spline_degree = 3
 
+        if not isinstance(slab_xy, np.ndarray):
+            slab_xy = np.array(slab_xy, dtype=np.float64)
+
         if slab_spline is None:
             import geomdl.fitting
             slab_spline = geomdl.fitting.interpolate_curve(
-                list(zip(slab_x, slab_y)), degree=slab_spline_degree)
+                slab_xy.tolist(), degree=slab_spline_degree)
 
-        slab_depth = slab_y.min()
-        slab_width = slab_x.max()
-        slab_x0 = [slab_x.min(), slab_y.max()]
+        slab_depth = slab_xy[:,1].min()
+        slab_width = slab_xy[:,0].max()
+        slab_x0 = [slab_xy[:,0].min(), slab_xy[:,1].max()]
 
         gmsh.model.add("subduction")
 
@@ -111,6 +114,8 @@ def generate(comm: MPI.Intracomm,
                                 removeObject=True, removeTool=True)
         gmsh.model.occ.synchronize()
 
+        # Generate delimiting horizontal lines of constant depth. Particularly
+        # useful for depth dependent material coefficients
         def fragment_wedge_with_horizontal_line(lines):
             if not hasattr(lines, "__len__"):
                 lines = (lines,)
@@ -170,19 +175,25 @@ def generate(comm: MPI.Intracomm,
         coms_slab = facet_coms(slab_facets)
 
         # slab
-        gmsh.model.addPhysicalGroup(1, [slab_facets[np.argmin(coms_slab[:,0])]],
+        gmsh.model.addPhysicalGroup(1,
+                                    [slab_facets[np.argmin(coms_slab[:, 0])]],
                                     tag=Labels.slab_left)
-        gmsh.model.addPhysicalGroup(1, [slab_facets[np.argmin(coms_slab[:,1])]],
+        gmsh.model.addPhysicalGroup(1,
+                                    [slab_facets[np.argmin(coms_slab[:, 1])]],
                                     tag=Labels.slab_bottom)
         # wedge
-        gmsh.model.addPhysicalGroup(1, wedge_facets[np.isclose(coms_wedge[:,0], slab_width + wedge_x_buffer)],
+        gmsh.model.addPhysicalGroup(1, wedge_facets[
+            np.isclose(coms_wedge[:, 0], slab_width + wedge_x_buffer)],
                                     tag=Labels.wedge_right)
-        gmsh.model.addPhysicalGroup(1, [wedge_facets[np.argmin(coms_wedge[:,1])]],
+        gmsh.model.addPhysicalGroup(1,
+                                    [wedge_facets[np.argmin(coms_wedge[:, 1])]],
                                     tag=Labels.wedge_bottom)
         # plate
-        gmsh.model.addPhysicalGroup(1, [plate_facets[np.argmax(coms_plate[:,0])]],
+        gmsh.model.addPhysicalGroup(1,
+                                    [plate_facets[np.argmax(coms_plate[:, 0])]],
                                     tag=Labels.plate_right)
-        gmsh.model.addPhysicalGroup(1, [plate_facets[np.argmax(coms_plate[:,1])]],
+        gmsh.model.addPhysicalGroup(1,
+                                    [plate_facets[np.argmax(coms_plate[:, 1])]],
                                     tag=Labels.plate_top)
 
         # -- Local refinement
@@ -203,7 +214,7 @@ def generate(comm: MPI.Intracomm,
                 *map(lambda x: set(get_pts(x)), (slab, *(w for w in wedge)))))
             corner_coords = np.array(
                 [gmsh.model.getValue(0, pt[1], []) for pt in corner_pt],
-                dtype=np.double)
+                dtype=np.float64)
             corner_pt = corner_pt[np.argmin(np.abs(corner_coords[:,1] - couple_y))]
 
         corner_dist = gmsh.model.mesh.field.add("Distance")
@@ -226,7 +237,8 @@ def generate(comm: MPI.Intracomm,
         # Other surfaces to refine
         interface_dist = gmsh.model.mesh.field.add("Distance")
         refine_surfs = np.concatenate(
-            ([slab_wedge[0]], gmsh.model.getEntitiesForPhysicalGroup(1, Labels.plate_wedge)))
+            (gmsh.model.getEntitiesForPhysicalGroup(1, Labels.slab_wedge),
+             gmsh.model.getEntitiesForPhysicalGroup(1, Labels.plate_wedge)))
         gmsh.model.mesh.field.setNumbers(interface_dist, "CurvesList", refine_surfs)
         interface_thresh = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(interface_thresh, "IField", interface_dist)
@@ -243,7 +255,7 @@ def generate(comm: MPI.Intracomm,
         gmsh.model.mesh.field.setAsBackgroundMesh(field_min_all)
 
         gmsh.model.mesh.generate(2)
-        gmsh.model.mesh.set_order(1)
+        gmsh.model.mesh.set_order(geom_degree)
 
     partitioner = dolfinx.mesh.create_cell_partitioner(
         dolfinx.mesh.GhostMode.none)
@@ -271,13 +283,13 @@ if __name__ == "__main__":
     y_slab = -x_slab
     wedge_x_buffer = 50.0
     plate_y = -50.0
-    couple_y = plate_y - 20.0
+    couple_y = None
     bulk_resolution = 25.0
     corner_resolution = 2.0
     surface_resolution = 5.0
 
     mesh, cell_tags, facet_tags = generate(
-        MPI.COMM_WORLD, x_slab, y_slab, wedge_x_buffer, plate_y,
+        MPI.COMM_WORLD, np.stack((x_slab, y_slab)).T, wedge_x_buffer, plate_y,
         corner_resolution, surface_resolution, bulk_resolution,
         couple_y=couple_y, slab_spline_degree=3)
     cell_tags.name = "zone_cells"
