@@ -12,8 +12,7 @@ import solvers
 
 
 def print0(*args):
-    if MPI.COMM_WORLD.rank == 0:
-        print(*args, flush=True)
+    PETSc.Sys.Print(" ".join(map(str, args)))
 
 
 slab_data = model.SlabData()
@@ -127,11 +126,15 @@ slab_tangent_slab = solvers.tangent_approximation(
     stokes_problem_slab.V, slab_facet_tags,
     [Labels.slab_wedge, Labels.slab_plate], z_hat)
 
+eta_wedge_is_linear = True
 eta_wedge = model.create_viscosity_1()
+eta_slab_is_linear = True
 eta_slab = model.create_viscosity_1()
-stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge)
-stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab)
-heat_problem.init(uh_full, slab_data, depth)
+stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge,
+                          use_iterative_solver=False)
+stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab,
+                         use_iterative_solver=False)
+heat_problem.init(uh_full, slab_data, depth, use_iterative_solver=False)
 
 # Useful initial guess for strainrate dependent viscosities
 if tdim == 2:
@@ -149,25 +152,24 @@ Th0 = dolfinx.fem.Function(Th.function_space)
 Th0.vector.array = Th.vector.array_r
 Th0.x.scatter_forward()
 
-solve_flow = True
 for picard_it in range(max_picard_its := 25):
     # Solve Stokes and interpolate velocity approximation into full geometry
-    if solve_flow:
+    if (not eta_wedge_is_linear) or (picard_it == 0):
         print0("Solving wedge problem")
         stokes_problem_wedge.assemble_stokes_system()
         stokes_problem_wedge.solve_stokes_system(uh_wedge)
-
-        print0("Solving slab problem")
-        stokes_problem_slab.assemble_stokes_system()
-        stokes_problem_slab.solve_stokes_system(uh_slab)
-
-        uh_full.interpolate(
-            uh_slab, cells=slab_cells,
-            nmm_interpolation_data=uh_slab2full_interp_data)
         uh_full.interpolate(
             uh_wedge, cells=wedge_cells,
             nmm_interpolation_data=uh_wedge2full_interp_data)
-        uh_full.x.scatter_forward()
+
+    if (not eta_slab_is_linear) or (picard_it == 0):
+        print0("Solving slab problem")
+        stokes_problem_slab.assemble_stokes_system()
+        stokes_problem_slab.solve_stokes_system(uh_slab)
+        uh_full.interpolate(
+            uh_slab, cells=slab_cells,
+            nmm_interpolation_data=uh_slab2full_interp_data)
+    uh_full.x.scatter_forward()
 
     # Solve temperature
     print0("Solving heat problem")
@@ -180,7 +182,7 @@ for picard_it in range(max_picard_its := 25):
     print0(f"Picard it {picard_it: {int(np.ceil(np.log10(max_picard_its)))}d}:"
            f" T_diff = {T_diff:.3e}")
 
-    if T_diff < (picard_tol := 1e-6):
+    if T_diff < (picard_tol := 1e-4):
         break
 
     # Interpolate temperature approximation into wedge geometry

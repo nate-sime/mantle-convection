@@ -125,7 +125,7 @@ class Stokes:
         self.V = dolfinx.fem.VectorFunctionSpace(mesh, ("CG", p_order))
         self.Q = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order - 1))
 
-    def init(self, uh, Th, eta, slab_velocity):
+    def init(self, uh, Th, eta, slab_velocity, use_iterative_solver):
         facet_tags = self.facet_tags
         mesh = self.mesh
         V, Q = self.V, self.Q
@@ -148,9 +148,9 @@ class Stokes:
         ds_fs = ds(Labels.free_slip)
         a_u00 += - ufl.inner(sigma(u, uh, Th), ufl.outer(ufl.dot(v, n) * n, n)) * ds_fs\
                  - ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), sigma(v, uh, Th)) * ds_fs\
-                 + alpha / h * ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), ufl.outer(v, n)) * ds_fs
-        a_u01 += - ufl.inner(p, ufl.div(v)) * ufl.dx + ufl.inner(p, ufl.dot(v, n)) * ds_fs
-        a_u10 += - ufl.inner(ufl.div(u), q) * ufl.dx + ufl.inner(ufl.dot(u, n), q) * ds_fs
+                 + 2 * eta(uh, Th) * alpha / h * ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), ufl.outer(v, n)) * ds_fs
+        a_u01 += ufl.inner(p, ufl.dot(v, n)) * ds_fs
+        a_u10 += ufl.inner(ufl.dot(u, n), q) * ds_fs
 
         a_u = dolfinx.fem.form(
             [[a_u00, a_u01],
@@ -197,11 +197,43 @@ class Stokes:
         self.b_u = dolfinx.fem.petsc.create_vector_block(L_u)
 
         ksp_u = PETSc.KSP().create(mesh.comm)
-        ksp_u.setOperators(self.A_u)
-        ksp_u.setType("preonly")
-        pc_u = ksp_u.getPC()
-        pc_u.setType("lu")
-        pc_u.setFactorSolverType("mumps")
+
+        V_map = V.dofmap.index_map
+        Q_map = Q.dofmap.index_map
+        offset_u = V_map.local_range[0] * V.dofmap.index_map_bs + \
+                   Q_map.local_range[0]
+        offset_p = offset_u + V_map.size_local * V.dofmap.index_map_bs
+        is_u = PETSc.IS().createStride(
+            V_map.size_local * V.dofmap.index_map_bs, offset_u, 1,
+            comm=PETSc.COMM_SELF)
+        is_p = PETSc.IS().createStride(
+            Q_map.size_local, offset_p, 1, comm=PETSc.COMM_SELF)
+        ksp_u.getPC().setFieldSplitIS(("u", is_u), ("p", is_p))
+
+        if use_iterative_solver:
+            ksp_u.setOperators(self.A_u, self.P_u)
+            ksp_u.setType("fgmres")
+            ksp_u.getPC().setType("fieldsplit")
+            ksp_u.getPC().setFieldSplitType(PETSc.PC.CompositeType.MULTIPLICATIVE)
+            ksp_u.getPC().setFieldSplitIS(("u", is_u), ("p", is_p))
+            ksp_u.setTolerances(rtol=1e-9)
+
+            monitor_n_digits = int(np.ceil(np.log10(ksp_u.max_it)))
+            def monitor(ksp, it, r):
+                PETSc.Sys.Print(f"{it: {monitor_n_digits}d}: {r:.3e}")
+
+            ksp_u_u, ksp_u_p = ksp_u.getPC().getFieldSplitSubKSP()
+            ksp_u.setMonitor(monitor)
+            ksp_u_u.setType("preonly")
+            ksp_u_u.getPC().setType("hypre")
+            ksp_u_p.setType("preonly")
+            ksp_u_p.getPC().setType("bjacobi")
+        else:
+            ksp_u.setOperators(self.A_u)
+            ksp_u.setType("preonly")
+            pc_u = ksp_u.getPC()
+            pc_u.setType("lu")
+            pc_u.setFactorSolverType("mumps")
 
         self.ksp_u = ksp_u
         self.x_u = self.A_u.createVecLeft()
@@ -237,7 +269,7 @@ class Heat:
         self.p_order = p_order
         self.S = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order))
 
-    def init(self, uh, slab_data, depth):
+    def init(self, uh, slab_data, depth, use_iterative_solver):
         facet_tags = self.facet_tags
         mesh = self.mesh
         S = self.S
@@ -285,10 +317,15 @@ class Heat:
 
         ksp_T = PETSc.KSP().create(mesh.comm)
         ksp_T.setOperators(self.A_T)
-        ksp_T.setType("preonly")
-        pc_T = ksp_T.getPC()
-        pc_T.setType("lu")
-        pc_T.setFactorSolverType("mumps")
+        if use_iterative_solver:
+            ksp_T.setType("gmres")
+            pc_T = ksp_T.getPC()
+            pc_T.setType("bjacobi")
+        else:
+            ksp_T.setType("preonly")
+            pc_T = ksp_T.getPC()
+            pc_T.setType("lu")
+            pc_T.setFactorSolverType("mumps")
 
         self.ksp_T = ksp_T
 
