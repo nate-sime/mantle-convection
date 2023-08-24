@@ -139,6 +139,19 @@ class Stokes:
         a_u00 = ufl.inner(sigma(u, uh, Th), ufl.sym(ufl.grad(v))) * ufl.dx
         a_u01 = - ufl.inner(p, ufl.div(v)) * ufl.dx
         a_u10 = - ufl.inner(q, ufl.div(u)) * ufl.dx
+
+        # free slip terms
+        n = ufl.FacetNormal(mesh)
+        h = ufl.CellDiameter(mesh)
+        ds = ufl.Measure("ds", subdomain_data=facet_tags)
+        alpha = dolfinx.fem.Constant(mesh, 20.0 * V.ufl_element().degree() ** 2)
+        ds_fs = ds(Labels.free_slip)
+        a_u00 += - ufl.inner(sigma(u, uh, Th), ufl.outer(ufl.dot(v, n) * n, n)) * ds_fs\
+                 - ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), sigma(v, uh, Th)) * ds_fs\
+                 + alpha / h * ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), ufl.outer(v, n)) * ds_fs
+        a_u01 += - ufl.inner(p, ufl.div(v)) * ufl.dx + ufl.inner(p, ufl.dot(v, n)) * ds_fs
+        a_u10 += - ufl.inner(ufl.div(u), q) * ufl.dx + ufl.inner(ufl.dot(u, n), q) * ds_fs
+
         a_u = dolfinx.fem.form(
             [[a_u00, a_u01],
              [a_u10, None]])
@@ -224,7 +237,7 @@ class Heat:
         self.p_order = p_order
         self.S = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order))
 
-    def init(self, uh, slab_data):
+    def init(self, uh, slab_data, depth):
         facet_tags = self.facet_tags
         mesh = self.mesh
         S = self.S
@@ -241,9 +254,6 @@ class Heat:
         L_T = dolfinx.fem.form(ufl.inner(Q_prime_constant, s) * ufl.dx)
 
         # -- Heat BCs
-        def depth(x):
-            return -x[1]
-
         inlet_facets = facet_tags.indices[facet_tags.values == Labels.slab_left]
         inlet_temp = dolfinx.fem.Function(S)
         inlet_temp.interpolate(lambda x: model.slab_inlet_temp(x, slab_data, depth))
@@ -255,7 +265,8 @@ class Heat:
         overriding_facets = facet_tags.indices[
             (facet_tags.values == Labels.plate_top) |
             (facet_tags.values == Labels.plate_right) |
-            (facet_tags.values == Labels.wedge_right)]
+            (facet_tags.values == Labels.wedge_right) |
+            (facet_tags.values == Labels.slab_right)]
         overring_temp = dolfinx.fem.Function(S)
         overring_temp.interpolate(
             lambda x: model.overriding_side_temp(x, slab_data, depth))

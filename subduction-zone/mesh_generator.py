@@ -18,10 +18,12 @@ class Labels(enum.IntEnum):
     slab_wedge = 6
     slab_left = 7
     slab_bottom = 8
-    wedge_right = 9
-    wedge_bottom = 10
-    plate_top = 11
-    plate_right = 12
+    slab_right = 9
+    wedge_right = 10
+    wedge_bottom = 11
+    plate_top = 12
+    plate_right = 13
+    free_slip = 14
 
 
 def transfer_facet_tags(mesh, facet_tags, entity_map, submesh):

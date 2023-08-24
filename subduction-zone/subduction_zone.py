@@ -39,9 +39,18 @@ with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_zone.xdmf", "r") as fi:
 
 # Set up the Stokes and Heat problems in the full zone and its subdomains
 p_order = 2
+tdim = mesh.topology.dim
 stokes_problem_wedge = solvers.Stokes(wedge_mesh, wedge_facet_tags, p_order)
 stokes_problem_slab = solvers.Stokes(slab_mesh, slab_facet_tags, p_order)
 heat_problem = solvers.Heat(mesh, facet_tags, p_order)
+
+match tdim:
+    case 2:
+        def depth(x):
+            return -x[1]
+    case 3:
+        def depth(x):
+            return -x[2]
 
 def stokes_problem_dof_report(problem):
     u_dofs = problem.V.dofmap.index_map.size_global \
@@ -110,7 +119,7 @@ if use_coupling_depth := False:
         wedge_mesh, np.array(plate_y - 10.0, dtype=np.float64))
 else:
     plate_y, couple_y = None, None
-z_hat = ufl.as_vector((0, -1))
+z_hat = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
 slab_tangent_wedge = solvers.tangent_approximation(
     stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge, z_hat,
     y_plate=plate_y, y_couple=couple_y)
@@ -122,14 +131,18 @@ eta_wedge = model.create_viscosity_1()
 eta_slab = model.create_viscosity_1()
 stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge)
 stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab)
-heat_problem.init(uh_full, slab_data)
+heat_problem.init(uh_full, slab_data, depth)
 
 # Useful initial guess for strainrate dependent viscosities
-gkb_wedge_flow_ = lambda x: model.gkb_wedge_flow(x, slab_data.plate_thickness)
-uh_full.interpolate(gkb_wedge_flow_, cells=wedge_cells)
-uh_full.x.scatter_forward()
-uh_wedge.interpolate(gkb_wedge_flow_)
-uh_wedge.x.scatter_forward()
+if tdim == 2:
+    gkb_wedge_flow_ = lambda x: model.gkb_wedge_flow(x, slab_data.plate_thickness)
+    uh_full.interpolate(gkb_wedge_flow_, cells=wedge_cells)
+    uh_full.x.scatter_forward()
+    uh_wedge.interpolate(gkb_wedge_flow_)
+    uh_wedge.x.scatter_forward()
+else:
+    uh_wedge.interpolate(lambda x: (x[0], x[1], x[2]))
+    uh_wedge.x.scatter_forward()
 
 # Compare temperature difference between Picard iterations
 Th0 = dolfinx.fem.Function(Th.function_space)

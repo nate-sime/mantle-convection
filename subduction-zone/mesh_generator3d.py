@@ -38,13 +38,15 @@ def generate(comm: MPI.Intracomm,
             slab_spline_degree = 3
 
         if not isinstance(slab_xyz, np.ndarray):
-            slab_xy = np.array(slab_xyz, dtype=np.float64)
+            slab_xyz = np.array(slab_xyz, dtype=np.float64)
 
         if slab_spline is None:
             import geomdl.fitting
             slab_spline = geomdl.fitting.interpolate_surface(
                 slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
                 degree_u=slab_spline_degree, degree_v=slab_spline_degree)
+
+        plot_spline_surface_pyvista(slab_spline)
 
         slab_width = slab_xyz[:,0].max()
         slab_length = slab_xyz[:,1].max()
@@ -100,7 +102,7 @@ def generate(comm: MPI.Intracomm,
         def fragment_wedge_with_horizontal_surface(surface):
             vols = gmsh.model.occ.getEntities(3)
             coms = np.array([gmsh.model.occ.getCenterOfMass(*v) for v in vols])
-            wedge = vols[np.argmax(coms[:,1])]
+            wedge = vols[np.argmax(coms[:,0])]
             slab = vols[np.argmin(coms[:,0])]
             new_surf, _ = gmsh.model.occ.intersect(
                 [wedge], [(2, surface)], removeTool=True, removeObject=False)
@@ -131,6 +133,7 @@ def generate(comm: MPI.Intracomm,
         wedge_facets = np.fromiter(set(sum((
             gmsh.model.getAdjacencies(3, w[1])[1].tolist() for w in wedge), [])
         ), dtype=np.int32)
+        free_slip_faces = []
 
         slab_plate = np.intersect1d(slab_facets, plate_facets)
         slab_wedge = np.intersect1d(slab_facets, wedge_facets)
@@ -147,16 +150,27 @@ def generate(comm: MPI.Intracomm,
         coms_slab = facet_coms(slab_facets)
 
         # slab
-        gmsh.model.addPhysicalGroup(2,
-                                    [slab_facets[np.argmin(coms_slab[:, 0])]],
-                                    tag=Labels.slab_left)
-        gmsh.model.addPhysicalGroup(2,
-                                    [slab_facets[np.argmin(coms_slab[:, 2])]],
-                                    tag=Labels.slab_bottom)
+        slab_left_face = [slab_facets[np.argmin(coms_slab[:, 0])]]
+        gmsh.model.addPhysicalGroup(2, slab_left_face, tag=Labels.slab_left)
+        slab_right_face = [slab_facets[np.argmin(coms_slab[:, 2])]]
+        gmsh.model.addPhysicalGroup(2, slab_right_face, tag=Labels.slab_right)
+        # find the remaining face that's not shared
+        unwanted_faces = set.union(
+            *map(set, (
+                slab_left_face, slab_right_face, wedge_facets, plate_facets)))
+        remaining_slab_facets = list(set(slab_facets) - unwanted_faces)
+        coms = np.array([gmsh.model.occ.getCenterOfMass(2, s) for s in remaining_slab_facets])
+        slab_bottom_face = remaining_slab_facets[np.argmin(coms[:, 2])]
+        gmsh.model.addPhysicalGroup(2, [slab_bottom_face], tag=Labels.slab_bottom)
+
+        free_slip_faces += list(set(remaining_slab_facets) - set([slab_bottom_face]))
+
         # wedge
-        gmsh.model.addPhysicalGroup(2,
-                                    [wedge_facets[np.argmax(coms_wedge[:, 0])]],
-                                    tag=Labels.wedge_right)
+        wedge_right_face = [wedge_facets[np.argmax(coms_wedge[:, 0])]]
+        gmsh.model.addPhysicalGroup(2, wedge_right_face, tag=Labels.wedge_right)
+        unwanted_faces = set.union(
+            *map(set, (wedge_right_face, slab_facets,  plate_facets)))
+        free_slip_faces += list(set(wedge_facets) - unwanted_faces)
 
         # plate
         gmsh.model.addPhysicalGroup(2,
@@ -166,30 +180,32 @@ def generate(comm: MPI.Intracomm,
                                     [plate_facets[np.argmax(coms_plate[:, 2])]],
                                     tag=Labels.plate_top)
 
+        # free slip
+        gmsh.model.addPhysicalGroup(2, free_slip_faces, tag=Labels.free_slip)
+
         # -- Local refinement
-        def get_pts(dimtag):
+        def get_codim_entities(dimtag):
             if isinstance(dimtag, tuple):
                 dimtag = [dimtag]
-            return gmsh.model.getBoundary(dimtag, recursive=True)
+            return gmsh.model.getBoundary(dimtag, oriented=False, recursive=False)
 
         # Apply local refinement to the coupling point if it exists, otherwise
         # the wedge corner
         if couple_y is None:
             corner_pt = set.intersection(
-                *map(lambda x: set(get_pts(x)), (plate, slab, wedge)))
+                *map(lambda x: set(get_codim_entities(x)), (plate, slab, wedge)))
             assert len(corner_pt) == 1
             quit()
             corner_pt = corner_pt.pop()
         else:
-            corner_pt = list(set.intersection(
-                *map(lambda x: set(get_pts(x)), (slab, *(w for w in wedge)))))
-            corner_coords = np.array(
-                [gmsh.model.getValue(0, pt[1], []) for pt in corner_pt],
-                dtype=np.float64)
-            corner_pt = corner_pt[np.argmin(np.abs(corner_coords[:,1] - couple_y))]
+            surfs = list(map(get_codim_entities, (slab, wedge)))
+            common_surfs = set.intersection(*map(set, surfs))
+            wires = list(set(*map(get_codim_entities, list(common_surfs))))
+            coms = np.array(list(gmsh.model.occ.getCenterOfMass(1, w[1]) for w in wires))
+            corner_wire = wires[np.argmin(np.abs(coms[:, 2] - couple_y))]
 
         corner_dist = gmsh.model.mesh.field.add("Distance")
-        gmsh.model.mesh.field.setNumbers(corner_dist, "PointsList", [corner_pt[1]])
+        gmsh.model.mesh.field.setNumbers(corner_dist, "CurvesList", [corner_wire[1]])
 
         L = abs(slab_width)
         D = abs(slab_depth)
@@ -210,7 +226,7 @@ def generate(comm: MPI.Intracomm,
         refine_surfs = np.concatenate(
             (gmsh.model.getEntitiesForPhysicalGroup(2, Labels.slab_wedge),
              gmsh.model.getEntitiesForPhysicalGroup(2, Labels.plate_wedge)))
-        gmsh.model.mesh.field.setNumbers(interface_dist, "CurvesList", refine_surfs)
+        gmsh.model.mesh.field.setNumbers(interface_dist, "FacesList", refine_surfs)
         interface_thresh = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(interface_thresh, "IField", interface_dist)
         gmsh.model.mesh.field.setNumber(
@@ -240,13 +256,16 @@ def generate(comm: MPI.Intracomm,
 if __name__ == "__main__":
     from mpi4py import MPI
 
-    x_slab, y_slab = np.meshgrid(np.linspace(0, 100.0, 10), np.linspace(0, 100.0, 10))
+    x_slab, y_slab = np.meshgrid(
+        np.linspace(0, 300.0, 10), np.linspace(0, 300.0, 10))
     z_slab = -x_slab
+    sli = slice(2,-3)
+    z_slab[sli,sli] += np.random.normal(np.random.normal(size=z_slab[sli,sli].shape, scale=1.0)*10)
     slab_xyz = np.vstack((x_slab.ravel(), y_slab.ravel(), z_slab.ravel())).T
     slab_xyz = slab_xyz[np.lexsort((slab_xyz[:,  0], slab_xyz[:, 1]))]
 
     plate_y = -50.0
-    slab_dz = -50.0
+    slab_dz = -200.0
     couple_y = plate_y - 10.0 #None
     bulk_resolution = 100.0
     corner_resolution = 10.0
