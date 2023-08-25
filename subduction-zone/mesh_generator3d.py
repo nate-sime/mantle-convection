@@ -12,45 +12,31 @@ import mesh_generator
 Labels = mesh_generator.Labels
 
 
-def plot_spline_surface_pyvista(spline):
+def plot_spline_surface_pyvista(spline, nu=64, nv=64):
     import pyvista
-    u, v = np.mgrid[0:1:20j, 0:1:20j]
+    u, v = np.mgrid[0:1:nu*1j, 0:1:nv*1j]
     uv = np.c_[u.ravel(), v.ravel()]
     X = np.array(spline.evaluate_list(uv), dtype=np.float64)
-    pyvista.PolyData(X).delaunay_2d().plot(scalars=X[:, 2], show_bounds=True)
+    x = X[:,0].reshape(nu, nv)
+    y = X[:,1].reshape(nu, nv)
+    z = X[:,2].reshape(nu, nv)
+    pyvista.StructuredGrid(x, y, z).plot(scalars=z, show_bounds=True)
 
 
 def generate(comm: MPI.Intracomm,
-             slab_xyz: typing.Iterable[typing.Iterable[float]],
-             slab_xy_shape: typing.Iterable[int],
+             slab_spline: geomdl.abstract.Surface,
              plate_y: float,
              slab_dz: float,
              corner_resolution: float,
              surface_resolution: float,
              bulk_resolution: float,
              couple_y: float = None,
-             slab_spline_degree: int = None,
-             slab_spline: geomdl.abstract.Curve = None,
              geom_degree: int = 1):
     gmsh.initialize()
     if comm.rank == 0:
-        if slab_spline_degree is None:
-            slab_spline_degree = 3
-
-        if not isinstance(slab_xyz, np.ndarray):
-            slab_xyz = np.array(slab_xyz, dtype=np.float64)
-
-        if slab_spline is None:
-            import geomdl.fitting
-            slab_spline = geomdl.fitting.interpolate_surface(
-                slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
-                degree_u=slab_spline_degree, degree_v=slab_spline_degree)
-
-        plot_spline_surface_pyvista(slab_spline)
-
-        slab_width = slab_xyz[:,0].max()
-        slab_length = slab_xyz[:,1].max()
-        slab_depth = slab_xyz[:,2].min()
+        slab_width = np.ptp(slab_xyz[:,0])
+        slab_length = np.ptp(slab_xyz[:,1])
+        slab_depth = np.ptp(slab_xyz[:,2])
         slab_x0 = [slab_xyz[:,0].min(), slab_xyz[:,1].min(), slab_xyz[:,2].max()]
 
         gmsh.model.add("subduction")
@@ -65,7 +51,7 @@ def generate(comm: MPI.Intracomm,
         slab = gmsh.model.occ.extrude(
             [(2, interface)], dx=0, dy=0, dz=slab_dz)
         wedge = gmsh.model.occ.extrude(
-            [(2, interface)], dx=0, dy=0, dz=-slab_depth * 1.1)
+            [(2, interface)], dx=0, dy=0, dz=slab_depth * 1.1)
 
         wires = gmsh.model.getBoundary([(2, interface)], oriented=False)
         coms = np.array([gmsh.model.occ.getCenterOfMass(1, w[1]) for w in wires])
@@ -92,11 +78,6 @@ def generate(comm: MPI.Intracomm,
                               recursive=True)
         gmsh.model.occ.synchronize()
 
-        # if couple_y is not None:
-        #     assert couple_y < plate_y
-        #     couple_surf = gmsh.model.occ.addRectangle(
-        #         slab_x0[0], slab_x0[1], couple_y, slab_width, slab_length)
-
         # Generate delimiting horizontal lines of constant depth. Particularly
         # useful for depth dependent material coefficients
         def fragment_wedge_with_horizontal_surface(surface):
@@ -112,7 +93,7 @@ def generate(comm: MPI.Intracomm,
             gmsh.model.occ.synchronize()
 
         plate_iface = gmsh.model.occ.addRectangle(
-            slab_x0[0], slab_x0[1], plate_y, slab_width, slab_length)
+            slab_x0[0], slab_x0[1], plate_y, dx=slab_width, dy=slab_length)
         fragment_wedge_with_horizontal_surface(plate_iface)
 
         # -- Labelling
@@ -135,6 +116,7 @@ def generate(comm: MPI.Intracomm,
         ), dtype=np.int32)
         free_slip_faces = []
 
+        # The shared faces between the volumes
         slab_plate = np.intersect1d(slab_facets, plate_facets)
         slab_wedge = np.intersect1d(slab_facets, wedge_facets)
         plate_wedge = np.intersect1d(plate_facets, wedge_facets)
@@ -166,11 +148,14 @@ def generate(comm: MPI.Intracomm,
         free_slip_faces += list(set(remaining_slab_facets) - set([slab_bottom_face]))
 
         # wedge
-        wedge_right_face = [wedge_facets[np.argmax(coms_wedge[:, 0])]]
+        remaining_wedge = list(set(wedge_facets) - set(plate_wedge) - set(slab_wedge))
+        coms = np.array([gmsh.model.occ.getCenterOfMass(2, s) for s in remaining_wedge])
+        wedge_free_slip = [remaining_wedge[np.argmin(coms[:,1])],
+                           remaining_wedge[np.argmax(coms[:,1])]]
+        wedge_right_face = list(set(remaining_wedge) - set(wedge_free_slip))
         gmsh.model.addPhysicalGroup(2, wedge_right_face, tag=Labels.wedge_right)
-        unwanted_faces = set.union(
-            *map(set, (wedge_right_face, slab_facets,  plate_facets)))
-        free_slip_faces += list(set(wedge_facets) - unwanted_faces)
+
+        free_slip_faces += wedge_free_slip
 
         # plate
         gmsh.model.addPhysicalGroup(2,
@@ -253,16 +238,60 @@ def generate(comm: MPI.Intracomm,
     return mesh, cell_tags, facet_tags
 
 
+def marianas_like(dip_angle: float = 45.0, a: float = 400.0,
+                  b: float = 450.0, n_t: float = 20, n_z: float = 20,
+                  z0: float = 0.0, depth: float = 300.0,
+                  b_trunc: float = 0.975):
+    """
+    Produce a Marianas trench style geometry. This is a straight dipping
+    slab with a half ellipse (x,y) axis cross section.
+
+    Notes:
+        The major axis needs to be truncate to avoid degenerate cells at the
+        corners of the subduction zone.
+
+    Args:
+        dip_angle: Dipping angle in degrees
+        a: Minor axis length (x direction)
+        b: Major axis length (y direction)
+        n_t: Number of angular discretisation steps
+        n_z: Number of depth discretisation steps
+        z0: Initial depth
+        depth: Depth of zone
+        b_trunc: Truncation of the major axis
+
+    Returns:
+        Gridded x, y, and z coordinates of the subduction interface surface.
+    """
+    width = b*2 * 0.975
+    tmin, tmax = -np.arcsin(width / (2.0 * b)), np.arcsin(width / (2.0 * b))
+    alpha = -np.radians(dip_angle)
+
+    t = np.linspace(tmin, tmax, n_t)
+    z = np.linspace(z0, -depth, n_z)
+    T, Z = np.meshgrid(t, z)
+
+    Y = b * np.sin(T)
+    x0 = Z / np.tan(alpha)
+    X = -a * np.cos(T) + x0
+    slabz = Z
+    return X, Y, slabz
+
+
 if __name__ == "__main__":
     from mpi4py import MPI
 
-    x_slab, y_slab = np.meshgrid(
-        np.linspace(0, 300.0, 10), np.linspace(0, 300.0, 10))
-    z_slab = -x_slab
-    sli = slice(2,-3)
-    z_slab[sli,sli] += np.random.normal(np.random.normal(size=z_slab[sli,sli].shape, scale=1.0)*10)
+    x_slab, y_slab, z_slab = marianas_like()
     slab_xyz = np.vstack((x_slab.ravel(), y_slab.ravel(), z_slab.ravel())).T
     slab_xyz = slab_xyz[np.lexsort((slab_xyz[:,  0], slab_xyz[:, 1]))]
+
+    import geomdl.fitting
+    slab_xy_shape = [x_slab.shape[0], y_slab.shape[1]]
+    slab_spline_degree = 2
+    slab_spline = geomdl.fitting.interpolate_surface(
+        slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
+        degree_u=slab_spline_degree, degree_v=slab_spline_degree)
+    plot_spline_surface_pyvista(slab_spline)
 
     plate_y = -50.0
     slab_dz = -200.0
@@ -272,10 +301,9 @@ if __name__ == "__main__":
     surface_resolution = 20.0
 
     mesh, cell_tags, facet_tags = generate(
-        MPI.COMM_WORLD, slab_xyz,
-        [x_slab.shape[0], y_slab.shape[1]], plate_y, slab_dz,
+        MPI.COMM_WORLD, slab_spline, plate_y, slab_dz,
         corner_resolution, surface_resolution, bulk_resolution,
-        couple_y=couple_y, slab_spline_degree=3)
+        couple_y=couple_y, geom_degree=1)
     cell_tags.name = "zone_cells"
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
