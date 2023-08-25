@@ -4,10 +4,16 @@ Provided is a DOLFINx implementation of the subduction zone model presented
 in van Keken et al. (2010) *A community benchmark for subduction zone modeling*
 (https://doi.org/10.1016/j.pepi.2008.04.015). This implementation may be
 used to reproduce the cases exhibited, or enable new subduction models with
-prescribed geometries. 
+more sophisticated geometries, material models, boundary conditions and
+geometries. For example:
 
-These examples are extensible for custom models with more sophisticated
-material models, boundary conditions and geometries.
+| Model                             | Temperature field                      |
+|-----------------------------------|----------------------------------------|
+| Community isoviscous benchmark    | ![Community](img/subduction2d_iso.png) |
+| Curved geometry dislocation creep | ![Curved](img/subduction2d_curved.png) |
+| Dislocation creep Alaska          | ![Alaska](img/subduction2d_alaska.png) |
+| 3D Marianas Trench                | ![Alaska](img/subduction3d.png)        |
+
 
 ### Note
 
@@ -16,7 +22,7 @@ DOLFINx use. Refer to, for example, van Keken et al (2010) and
 [the DOLFINx tutorial](https://jsdokken.com/dolfinx-tutorial/), respectively.
 
 
-### Dependencies
+# Dependencies
 
 * The components of the FEniCSx project: https://github.com/FEniCS
 * The components of PETSc: https://gitlab.com/petsc/petsc

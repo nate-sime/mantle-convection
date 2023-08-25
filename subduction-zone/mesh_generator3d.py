@@ -287,7 +287,7 @@ if __name__ == "__main__":
 
     import geomdl.fitting
     slab_xy_shape = [x_slab.shape[0], y_slab.shape[1]]
-    slab_spline_degree = 2
+    slab_spline_degree = 3
     slab_spline = geomdl.fitting.interpolate_surface(
         slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
         degree_u=slab_spline_degree, degree_v=slab_spline_degree)
