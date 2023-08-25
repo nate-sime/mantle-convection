@@ -1,7 +1,6 @@
 from mpi4py import MPI
 from petsc4py import PETSc
 import numpy as np
-import scipy
 import dolfinx
 import dolfinx.fem.petsc
 import ufl
@@ -127,9 +126,9 @@ slab_tangent_slab = solvers.tangent_approximation(
     [Labels.slab_wedge, Labels.slab_plate], z_hat)
 
 eta_wedge_is_linear = True
-eta_wedge = model.create_viscosity_1()
+eta_wedge = model.create_viscosity_isoviscous()
 eta_slab_is_linear = True
-eta_slab = model.create_viscosity_1()
+eta_slab = model.create_viscosity_isoviscous()
 stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge,
                           use_iterative_solver=False)
 stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab,

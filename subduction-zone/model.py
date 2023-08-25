@@ -85,13 +85,13 @@ class SlabData:
         return t * self.t_yr_to_s / self.t_r
 
 
-def create_viscosity_1():
+def create_viscosity_isoviscous():
     def eta(u, T):
         return 1
     return eta
 
 
-def create_viscosity_2a(mesh):
+def create_viscosity_diffusion_creep(mesh):
     R = dolfinx.fem.Constant(mesh, 8.3145)
     Adiff = dolfinx.fem.Constant(mesh, 1.32043e9)
     Ediff = dolfinx.fem.Constant(mesh, 335e3)
@@ -104,7 +104,7 @@ def create_viscosity_2a(mesh):
     return eta
 
 
-def create_viscosity_2b(mesh, slab_data):
+def create_viscosity_dislocation_creep(mesh, slab_data):
     R = dolfinx.fem.Constant(mesh, 8.3145)
     eta_max = dolfinx.fem.Constant(mesh, 1e26)
     eta_scale = dolfinx.fem.Constant(mesh, 1e21)
