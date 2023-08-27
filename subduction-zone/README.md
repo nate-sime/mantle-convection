@@ -56,33 +56,30 @@ dislocation creep viscosity models are provided  in `model.py`.
 
 `mesh_generator.py` is easily extensible for custom slab geometries defined
 in the (x, y) plane. The
-slab surface is approximated by a B-spline interpolation of a
+slab surface is approximated by a B-spline interpolating a
 sequence of cartesian points monotonically increasing the `x` direction.
 
 A 3D mesh generator example is given in `mesh_generator3d.py` where the given
 example is an approximation of the Mariana Trench.
 
-# Notes on 3D modelling:
+# Notes on 3D modelling
 
-Mesh generation is currently limited to serial processing only.
-
-Parallel computation of the subduction zone model is easily facilitated by MPI,
-e.g.,
-
+1. Mesh generation is currently limited to serial processing only.
+2. Parallel computation of the subduction zone model is easily facilitated by
+   MPI, e.g.,
 ```bash
 mpirun -np 2 python3 subduction_zone.py
 ```
+3. Generating 3D geometries is **difficult**. One must ensure:
 
-Generating 3D geometries is **difficult**. One must ensure:
+   1. an appropriate approximations of the slab surface,
+   1. the B-spline interpolating those points is smooth,
+   1. the curation of the geometry definitions, volume labels and face labels
+      for the solvers' interpretation,
+   1. a high quality mesh with well conditioned cells,
+   1. appropriate resolution of the mesh resolving material coefficients.
 
-* an appropriate approximations of the slab surface,
-* the B-spline interpolating those points is smooth,
-* the curation of the geometry definitions, volume lables and face labels for 
-  the solvers' interpretation,
-* a high quality mesh with well conditioned cells,
-* appropriate resolution of the mesh resolving material coefficients.
-
-It is recommended to use an iterative solver to solve the 3D linear Stokes
+4. It is recommended to use an iterative solver to solve the 3D linear Stokes
 system. A simple implementation is provided; however, it is encouraged that
 the user implement their problem specific solver depending on the complexity
 of their model.
