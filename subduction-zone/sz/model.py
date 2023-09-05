@@ -1,8 +1,26 @@
+import enum
 import dataclasses
 import numpy as np
 import scipy
 import dolfinx
 import ufl
+
+
+class Labels(enum.IntEnum):
+    plate = 1
+    slab = 2
+    wedge = 3
+    plate_wedge = 4
+    slab_plate = 5
+    slab_wedge = 6
+    slab_left = 7
+    slab_bottom = 8
+    slab_right = 9
+    wedge_right = 10
+    wedge_bottom = 11
+    plate_top = 12
+    plate_right = 13
+    free_slip = 14
 
 
 @dataclasses.dataclass

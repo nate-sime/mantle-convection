@@ -6,9 +6,10 @@ import dolfinx
 import ufl
 
 import mesh_generator
-import model
+import sz
+import sz.model
 
-Labels = mesh_generator.Labels
+Labels = sz.model.Labels
 
 
 def tangent_approximation(
@@ -288,7 +289,7 @@ class Heat:
         # Weak heat BCs
         overring_temp = dolfinx.fem.Function(S)
         overring_temp.interpolate(
-            lambda x: model.overriding_side_temp(x, slab_data, depth))
+            lambda x: sz.model.overriding_side_temp(x, slab_data, depth))
         overring_temp.x.scatter_forward()
 
         ds = ufl.Measure("ds", subdomain_data=facet_tags)
@@ -313,7 +314,8 @@ class Heat:
         # Strong heat BCs
         inlet_facets = facet_tags.indices[facet_tags.values == Labels.slab_left]
         inlet_temp = dolfinx.fem.Function(S)
-        inlet_temp.interpolate(lambda x: model.slab_inlet_temp(x, slab_data, depth))
+        inlet_temp.interpolate(
+            lambda x: sz.model.slab_inlet_temp(x, slab_data, depth))
         inlet_temp.x.scatter_forward()
         bc_inlet = dolfinx.fem.dirichletbc(
             inlet_temp, dolfinx.fem.locate_dofs_topological(
