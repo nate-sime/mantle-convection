@@ -39,7 +39,7 @@ The standard workflow is as follows:
 1. Generate a 2D mesh. The default parameters are those required by the benchmark.
 
 ```bash
-python3 mesh_generator.py
+python3 mesh_generator2d.py
 ```
 
 2. Run the subduction zone model
