@@ -65,16 +65,8 @@ sequence of Cartesian points monotonically increasing in the $x$ direction.
 A 3D mesh generator example is given in `mesh_generator3d.py` where the given
 example is an approximation of the Mariana Trench.
 
-# Notes on 3D modelling:
 
-Mesh generation is currently limited to serial processing only.
-
-Parallel computation of the subduction zone model is easily facilitated by MPI,
-e.g.,
-
-```bash
-mpirun -np 2 python3 subduction_zone.py
-```
+# 3D modelling
 
 Generating 3D geometries is **difficult**. One must ensure:
 
@@ -84,6 +76,14 @@ Generating 3D geometries is **difficult**. One must ensure:
   the solvers' interpretation,
 * a high quality mesh with well conditioned cells,
 * appropriate resolution of the mesh resolving material coefficients.
+
+The provided mesh generation examples are currently limited to serial
+processing only; however, parallel computation of the subduction zone model is
+easily facilitated by MPI, e.g.,
+
+```bash
+mpirun -np 2 python3 subduction_zone.py
+```
 
 It is recommended to use an iterative solver to solve the 3D linear Stokes
 system. A simple implementation is provided; however, it is encouraged that
