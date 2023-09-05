@@ -21,6 +21,9 @@ These examples are not intended to be instructive for geophysics modelling or
 DOLFINx use. Refer to, for example, van Keken et al (2010) and
 [the DOLFINx tutorial](https://jsdokken.com/dolfinx-tutorial/), respectively.
 
+This code is provided in support of the work Sime et al. *Thermal modeling of
+subduction zones with prescribed and evolving 2D and 3D slab geometries*.
+
 
 # Dependencies
 
@@ -55,9 +58,9 @@ dislocation creep viscosity models are provided  in `model.py`.
 # Custom subduction zone geometry
 
 `mesh_generator.py` is easily extensible for custom slab geometries defined
-in the (x, y) plane. The
+in the $(x, y)$ plane. The
 slab surface is approximated by a B-spline interpolation of a
-sequence of cartesian points monotonically increasing the `x` direction.
+sequence of Cartesian points monotonically increasing in the $x$ direction.
 
 A 3D mesh generator example is given in `mesh_generator3d.py` where the given
 example is an approximation of the Mariana Trench.
@@ -75,9 +78,9 @@ mpirun -np 2 python3 subduction_zone.py
 
 Generating 3D geometries is **difficult**. One must ensure:
 
-* an appropriate approximations of the slab surface,
+* an appropriate approximation of the slab surface,
 * the B-spline interpolating those points is smooth,
-* the curation of the geometry definitions, volume lables and face labels for 
+* the curation of the geometry definitions, volume labels and face labels for 
   the solvers' interpretation,
 * a high quality mesh with well conditioned cells,
 * appropriate resolution of the mesh resolving material coefficients.
