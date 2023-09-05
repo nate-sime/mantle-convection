@@ -13,32 +13,18 @@ from sz.mesh_utils import extract_submesh_and_transfer_facets
 
 
 def generate(comm: MPI.Intracomm,
-             slab_xy: typing.Iterable[typing.Iterable[float]],
+             slab_spline: geomdl.abstract.Curve,
              wedge_x_buffer: float,
              plate_y: float,
              corner_resolution: float,
              surface_resolution: float,
              bulk_resolution: float,
              couple_y: float = None,
-             slab_spline_degree: int = None,
-             slab_spline: geomdl.abstract.Curve = None,
              geom_degree: int = 1):
     gmsh.initialize()
     if comm.rank == 0:
-        if slab_spline_degree is None:
-            slab_spline_degree = 3
-
-        if not isinstance(slab_xy, np.ndarray):
-            slab_xy = np.array(slab_xy, dtype=np.float64)
-
-        if slab_spline is None:
-            import geomdl.fitting
-            slab_spline = geomdl.fitting.interpolate_curve(
-                slab_xy.tolist(), degree=slab_spline_degree)
-
-        slab_depth = slab_xy[:,1].min()
-        slab_width = slab_xy[:,0].max()
-        slab_x0 = [slab_xy[:,0].min(), slab_xy[:,1].max()]
+        slab_width, slab_depth = slab_spline.evaluate_single(1.0)
+        slab_x0 = slab_spline.evaluate_single(0.0)
 
         gmsh.model.add("subduction")
 
@@ -219,10 +205,14 @@ if __name__ == "__main__":
     corner_resolution = 2.0
     surface_resolution = 5.0
 
+    import geomdl.fitting
+    slab_spline = geomdl.fitting.interpolate_curve(
+        np.stack((x_slab, y_slab)).T.tolist(), degree=3)
+
     mesh, cell_tags, facet_tags = generate(
-        MPI.COMM_WORLD, np.stack((x_slab, y_slab)).T, wedge_x_buffer, plate_y,
+        MPI.COMM_WORLD, slab_spline, wedge_x_buffer, plate_y,
         corner_resolution, surface_resolution, bulk_resolution,
-        couple_y=couple_y, slab_spline_degree=3)
+        couple_y=couple_y)
     cell_tags.name = "zone_cells"
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
