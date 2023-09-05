@@ -7,12 +7,12 @@ used to reproduce the cases exhibited, or enable new subduction models with
 more sophisticated geometries, material models, boundary conditions and
 geometries. For example:
 
-| Model                             | Temperature field                      |
-|-----------------------------------|----------------------------------------|
-| Community isoviscous benchmark    | ![Community](img/subduction2d_iso.png) |
-| Curved geometry dislocation creep | ![Curved](img/subduction2d_curved.png) |
-| Dislocation creep Alaska          | ![Alaska](img/subduction2d_alaska.png) |
-| 3D Marianas Trench                | ![Alaska](img/subduction3d.png)        |
+| Model                             | Temperature field                       |
+|-----------------------------------|-----------------------------------------|
+| Community isoviscous benchmark    | ![Community](img/subduction2d_iso.png)  |
+| Curved geometry dislocation creep | ![Curved](img/subduction2d_curved.png)  |
+| Dislocation creep Alaska          | ![Alaska](img/subduction2d_alaska.png)  |
+| 3D Mariana Trench                 | ![Mariana Trench](img/subduction3d.png) |
 
 
 ### Note
