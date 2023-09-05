@@ -1,13 +1,10 @@
 from mpi4py import MPI
 from petsc4py import PETSc
 import numpy as np
-import dolfinx
 import dolfinx.fem.petsc
 import ufl
 
-import mesh_generator
-import model
-import solvers
+from sz import model, solvers
 
 
 def print0(*args):
@@ -15,7 +12,7 @@ def print0(*args):
 
 
 slab_data = model.SlabData()
-Labels = mesh_generator.Labels
+Labels = model.Labels
 
 # Read meshes and partition over all processes
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_zone.xdmf", "r") as fi:

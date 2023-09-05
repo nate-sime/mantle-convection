@@ -5,7 +5,6 @@ import numpy as np
 import dolfinx
 import ufl
 
-import mesh_generator
 import sz
 import sz.model
 
