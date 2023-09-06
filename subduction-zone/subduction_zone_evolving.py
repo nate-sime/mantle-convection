@@ -8,7 +8,7 @@ import geomdl.exchange
 import dolfinx.fem.petsc
 import ufl
 
-from sz import model, solvers
+from sz import model, solvers, interpolation_utils
 
 
 def print0(*args):
@@ -18,11 +18,13 @@ def print0(*args):
 slab_data = model.SlabData()
 Labels = model.Labels
 
+
 def solve_slab_problem(
         file_path: pathlib.Path, Th0_mesh0: dolfinx.fem.Function = None,
         dt: float = None,
         slab_spline: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
-        slab_spline_m: geomdl.abstract.Curve | geomdl.abstract.Surface = None):
+        slab_spline_m: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
+        all_domains_overlap: bool = False):
 
     if ((slab_spline is None) ^ (slab_spline_m is None)
             ^ (Th0_mesh0 is None) ^ (dt is None)):
@@ -161,11 +163,14 @@ def solve_slab_problem(
     Th0 = None
     if Th0_mesh0 is not None:
         Th0 = dolfinx.fem.Function(heat_problem.S)
-        nmm_data = dolfinx.fem.create_nonmatching_meshes_interpolation_data(
-            Th0.function_space.mesh._cpp_object,
-            Th0.function_space.element,
-            Th0_mesh0.function_space.mesh._cpp_object)
-        Th0.interpolate(Th0_mesh0, nmm_interpolation_data=nmm_data)
+        if all_domains_overlap:
+            nmm_data = dolfinx.fem.create_nonmatching_meshes_interpolation_data(
+                Th0.function_space.mesh._cpp_object,
+                Th0.function_space.element,
+                Th0_mesh0.function_space.mesh._cpp_object)
+            Th0.interpolate(Th0_mesh0, nmm_interpolation_data=nmm_data)
+        else:
+            interpolation_utils.nonmatching_interpolate(Th0_mesh0, Th0)
         Th0.x.scatter_forward()
     heat_problem.init(uh_full, slab_data, depth, use_iterative_solver=False,
                       Th0=Th0, dt=dt)
@@ -233,6 +238,15 @@ def solve_slab_problem(
 
 
 def copy_spline(spline0: geomdl.abstract.Curve | geomdl.abstract.Surface):
+    """
+    Given a geomdl Curve or Surface, return a copy.
+
+    Args:
+        spline0: Spline to copy
+
+    Returns:
+    Copied spline
+    """
     if spline0.pdimension == 1:
         spline = geomdl.BSpline.Curve()
         spline.degree = spline0.degree
@@ -250,6 +264,28 @@ def copy_spline(spline0: geomdl.abstract.Curve | geomdl.abstract.Surface):
     raise NotImplementedError("Spline type not known")
 
 
+def xdmf_interpolator(u):
+    """
+    Interpolate the FE function in a space compatible with the mesh coordinate
+    element. Useful for outputting to XDMF.
+
+    Args:
+        u: Function to interpolate
+
+    Returns:
+    Interpolated function
+    """
+    mesh = u.function_space.mesh
+    mesh_p = mesh.ufl_domain().ufl_coordinate_element().degree()
+    mesh_fam = mesh.ufl_domain().ufl_coordinate_element().family()
+
+    u_mesh = dolfinx.fem.Function(dolfinx.fem.FunctionSpace(
+        mesh, (mesh_fam, mesh_p)))
+    u_mesh.interpolate(u)
+    u_mesh.x.scatter_forward()
+    return u_mesh
+
+
 if __name__ == "__main__":
     output_directory = pathlib.Path("evolving2d_results")
     input_directory = pathlib.Path("evolving2d")
@@ -264,6 +300,7 @@ if __name__ == "__main__":
     slab_spline_tfinal = geomdl.exchange.import_json(
         input_directory / "slab_spline_tfinal.json")[0]
 
+    # Theta-scheme discretised spline deformation states
     slab_spline = copy_spline(slab_spline_t0)
     slab_spline_m = copy_spline(slab_spline_t0)
 
@@ -275,23 +312,14 @@ if __name__ == "__main__":
     t_yr_steps = np.linspace(0.0, t_final_yr, n_slab_steps + 1)
     dt = slab_data.t_yr_to_ndim(t_yr_steps[1] - t_yr_steps[0])
 
-    def xdmf_interpolator(u):
-        mesh = u.function_space.mesh
-        mesh_p = mesh.ufl_domain().ufl_coordinate_element().degree()
-        mesh_fam = mesh.ufl_domain().ufl_coordinate_element().family()
-
-        u_mesh = dolfinx.fem.Function(dolfinx.fem.FunctionSpace(
-            mesh, (mesh_fam, mesh_p)))
-        u_mesh.interpolate(u)
-        u_mesh.x.scatter_forward()
-        return u_mesh
-
     for i, t_yr in enumerate(t_yr_steps):
         if i == 0:
+            # Initial steady state
             mesh0, T_data0, u_data0 = solve_slab_problem(
-                input_directory / f"subduction_zone_{0:{idx_fmt}}.xdmf")
+                input_directory / f"subduction_zone_{i:{idx_fmt}}.xdmf")
             Th0_mesh0 = T_data0[0]
         else:
+            # Parameterised spline in time
             theta = t_yr / t_final_yr
             theta0 = t_yr_steps[i - 1] / t_final_yr
             slab_spline.ctrlpts = ctrl_pt_transfer_fn(
@@ -304,11 +332,11 @@ if __name__ == "__main__":
                 Th0_mesh0=Th0_mesh0, dt=dt, slab_spline=slab_spline,
                 slab_spline_m=slab_spline_m)
 
-            Th0_mesh0 = T_data0[0]
-            uh_mesh0 = u_data0[0]
-            with dolfinx.io.XDMFFile(
-                    mesh0.comm,
-                    output_directory / f"temperature{i:{idx_fmt}}.xdmf",
-                    "w") as fi:
-                fi.write_mesh(Th0_mesh0.function_space.mesh)
-                fi.write_function(xdmf_interpolator(Th0_mesh0), t=t_yr / 1e6)
+        Th0_mesh0 = T_data0[0]
+        uh_mesh0 = u_data0[0]
+        with dolfinx.io.XDMFFile(
+                mesh0.comm,
+                output_directory / f"temperature_{i:{idx_fmt}}.xdmf",
+                "w") as fi:
+            fi.write_mesh(Th0_mesh0.function_space.mesh)
+            fi.write_function(xdmf_interpolator(Th0_mesh0), t=t_yr / 1e6)
