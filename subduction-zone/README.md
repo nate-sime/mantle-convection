@@ -12,6 +12,7 @@ geometries. For example:
 | Community isoviscous benchmark    | ![Community](img/subduction2d_iso.png)  |
 | Curved geometry dislocation creep | ![Curved](img/subduction2d_curved.png)  |
 | Dislocation creep Alaska          | ![Alaska](img/subduction2d_alaska.png)  |
+| Evolving 2D slab                  | ![Evolving Trench](img/evolving2d.gif)  |
 | 3D Mariana Trench                 | ![Mariana Trench](img/subduction3d.png) |
 
 
@@ -42,7 +43,7 @@ The standard workflow is as follows:
 1. Generate a 2D mesh. The default parameters are those required by the benchmark.
 
 ```bash
-python3 mesh_generator.py
+python3 mesh_generator2d.py
 ```
 
 2. Run the subduction zone model

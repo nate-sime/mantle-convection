@@ -5,10 +5,10 @@ import numpy as np
 import dolfinx
 import ufl
 
-import mesh_generator
-import model
+import sz
+import sz.model
 
-Labels = mesh_generator.Labels
+Labels = sz.model.Labels
 
 
 def tangent_approximation(
@@ -269,7 +269,12 @@ class Heat:
         self.p_order = p_order
         self.S = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order))
 
-    def init(self, uh, slab_data, depth, use_iterative_solver):
+    def init(self, uh, slab_data, depth, use_iterative_solver,
+             Th0: dolfinx.fem.Function=None, dt: dolfinx.fem.Constant=None):
+        if (Th0 is None) ^ (dt is None):
+            raise RuntimeError(
+                "Time dependent formulation requires Th0 and dt")
+
         facet_tags = self.facet_tags
         mesh = self.mesh
         S = self.S
@@ -285,10 +290,16 @@ class Heat:
         Q_prime_constant = dolfinx.fem.Constant(mesh, slab_data.Q_prime)
         L_T = ufl.inner(Q_prime_constant, s) * ufl.dx
 
+        if Th0 is not None:
+            a_T += ufl.inner(
+                slab_data.rho * slab_data.cp * T / dt, s) * ufl.dx
+            L_T += ufl.inner(
+                slab_data.rho * slab_data.cp * Th0 / dt, s) * ufl.dx
+
         # Weak heat BCs
         overring_temp = dolfinx.fem.Function(S)
         overring_temp.interpolate(
-            lambda x: model.overriding_side_temp(x, slab_data, depth))
+            lambda x: sz.model.overriding_side_temp(x, slab_data, depth))
         overring_temp.x.scatter_forward()
 
         ds = ufl.Measure("ds", subdomain_data=facet_tags)
@@ -313,7 +324,8 @@ class Heat:
         # Strong heat BCs
         inlet_facets = facet_tags.indices[facet_tags.values == Labels.slab_left]
         inlet_temp = dolfinx.fem.Function(S)
-        inlet_temp.interpolate(lambda x: model.slab_inlet_temp(x, slab_data, depth))
+        inlet_temp.interpolate(
+            lambda x: sz.model.slab_inlet_temp(x, slab_data, depth))
         inlet_temp.x.scatter_forward()
         bc_inlet = dolfinx.fem.dirichletbc(
             inlet_temp, dolfinx.fem.locate_dofs_topological(
