@@ -65,11 +65,11 @@ if __name__ == "__main__":
     slab_spline_degree = 3
 
     t_final_yr = 11e6
-    n_slab_steps = 1
+    n_slab_steps = 10
 
-    depth = 600.0
-    x_slab = np.linspace(0, depth, 10)
-    wedge_x_buffer = 50.0
+    depth = 400.0
+    x_slab = np.linspace(0, depth, 6)
+    wedge_x_buffer = 0.0
     plate_y = -50.0
     couple_y = None
     bulk_resolution = 25.0
@@ -82,7 +82,7 @@ if __name__ == "__main__":
         np.stack((x_slab, y_slab)).T.tolist(), degree=slab_spline_degree)
 
     # The final slab surface
-    y_slab = -depth**-1 * x_slab**2
+    x_slab = np.where(x_slab > 200.0, x_slab + 250.0, x_slab)
     slab_spline_tfinal = geomdl.fitting.interpolate_curve(
         np.stack((x_slab, y_slab)).T.tolist(), degree=slab_spline_degree)
 

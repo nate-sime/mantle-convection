@@ -12,6 +12,7 @@ geometries. For example:
 | Community isoviscous benchmark    | ![Community](img/subduction2d_iso.png) |
 | Curved geometry dislocation creep | ![Curved](img/subduction2d_curved.png) |
 | Dislocation creep Alaska          | ![Alaska](img/subduction2d_alaska.png) |
+| Evolving 2D slab                  | ![Evolve](img/evolving2d.gif)          |
 | 3D Marianas Trench                | ![Alaska](img/subduction3d.png)        |
 
 
