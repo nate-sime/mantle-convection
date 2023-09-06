@@ -18,9 +18,17 @@ def print0(*args):
 slab_data = model.SlabData()
 Labels = model.Labels
 
-def solve_slab_problem(file_path: pathlib.Path,
-                       Th0_mesh0: dolfinx.fem.Function=None,
-                       dt: float=None):
+def solve_slab_problem(
+        file_path: pathlib.Path, Th0_mesh0: dolfinx.fem.Function = None,
+        dt: float = None,
+        slab_spline: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
+        slab_spline_m: geomdl.abstract.Curve | geomdl.abstract.Surface = None):
+
+    if ((slab_spline is None) ^ (slab_spline_m is None)
+            ^ (Th0_mesh0 is None) ^ (dt is None)):
+        raise RuntimeError(
+            "Time dependent evolving slab requires all parameters provided")
+
     # Read meshes and partition over all processes
     with dolfinx.io.XDMFFile(MPI.COMM_WORLD, file_path, "r") as fi:
         mesh = fi.read_mesh(
@@ -129,6 +137,17 @@ def solve_slab_problem(file_path: pathlib.Path,
         stokes_problem_slab.V, slab_facet_tags,
         [Labels.slab_wedge, Labels.slab_plate], z_hat)
 
+    if slab_spline_m:
+        import sz.spline_util
+        sz.spline_util.slab_velocity_kdtree(
+            slab_spline, slab_spline_m, slab_tangent_slab,
+            slab_facet_tags.indices[slab_facet_tags.values == Labels.slab_wedge],
+            dt, resolution=256)
+        sz.spline_util.slab_velocity_kdtree(
+            slab_spline, slab_spline_m, slab_tangent_wedge,
+            wedge_facet_tags.indices[wedge_facet_tags.values == Labels.slab_wedge],
+            dt, resolution=256)
+
     eta_wedge_is_linear = True
     eta_wedge = model.create_viscosity_isoviscous()
     eta_slab_is_linear = True
@@ -213,36 +232,22 @@ def solve_slab_problem(file_path: pathlib.Path,
     return mesh, T_data, u_data
 
 
-# if __name__ == "__main__":
-#     mesh, T_data, u_data = solve_slab_problem(
-#         pathlib.Path("subduction_zone.xdmf"))
-#     Th = T_data[0]
-#     uh_full, uh_slab, uh_wedge = u_data
-#
-#     tree = dolfinx.geometry.bb_tree(mesh, mesh.geometry.dim)
-#     points6060 = np.array([60.0, -60.0, 0], np.float64)
-#     cell_candidates = dolfinx.geometry.compute_collisions_points(tree, points6060)
-#     cell_collided = dolfinx.geometry.compute_colliding_cells(
-#         mesh, cell_candidates, points6060)
-#
-#     T_6060 = None
-#     if len(cell_collided) > 0:
-#         T_6060 = Th.eval(
-#             points6060, cell_collided[0])[0] - slab_data.Ts
-#     T_6060 = mesh.comm.gather(T_6060, root=0)
-#
-#     if mesh.comm.rank == 0:
-#         print(f"T_6060 = {[T_val for T_val in T_6060 if T_val is not None]}",
-#               flush=True)
-#
-#     with dolfinx.io.VTXWriter(mesh.comm, "temperature.bp", Th, "bp4") as f:
-#         f.write(0.0)
-#     with dolfinx.io.VTXWriter(mesh.comm, "velocity_wedge.bp", uh_wedge, "bp4") as f:
-#         f.write(0.0)
-#     with dolfinx.io.VTXWriter(mesh.comm, "velocity_slab.bp", uh_slab, "bp4") as f:
-#         f.write(0.0)
-#     with dolfinx.io.VTXWriter(mesh.comm, "velocity.bp", uh_full, "bp4") as f:
-#         f.write(0.0)
+def copy_spline(spline0: geomdl.abstract.Curve | geomdl.abstract.Surface):
+    if spline0.pdimension == 1:
+        spline = geomdl.BSpline.Curve()
+        spline.degree = spline0.degree
+        spline.ctrlpts = spline0.ctrlpts
+        spline.knotvector = spline0.knotvector
+        return spline
+    elif spline0.pdimension == 2:
+        spline = geomdl.BSpline.Surface()
+        spline.degree = spline0.degree
+        spline.ctrlpts_size_u = spline0.ctrlpts_size_u
+        spline.ctrlpts_size_v = spline0.ctrlpts_size_v
+        spline.ctrlpts = spline0.ctrlpts
+        spline.knotvector = spline0.knotvector
+        return spline
+    raise NotImplementedError("Spline type not known")
 
 
 if __name__ == "__main__":
@@ -259,21 +264,16 @@ if __name__ == "__main__":
     slab_spline_tfinal = geomdl.exchange.import_json(
         input_directory / "slab_spline_tfinal.json")[0]
 
-    slab_spline = geomdl.BSpline.Curve()
-    slab_spline.degree = slab_spline_t0.degree
-    slab_spline.ctrlpts = slab_spline_t0.ctrlpts
-    slab_spline.knotvector = slab_spline_t0.knotvector
+    slab_spline = copy_spline(slab_spline_t0)
+    slab_spline_m = copy_spline(slab_spline_t0)
 
-    def ctrl_pt_transfer_fn(theta):
-        ctrl0 = np.array(slab_spline_t0.ctrlpts, dtype=np.float64)
-        ctrl1 = np.array(slab_spline_tfinal.ctrlpts, dtype=np.float64)
+    def ctrl_pt_transfer_fn(splineA, splineB, theta):
+        ctrl0 = np.array(splineA.ctrlpts, dtype=np.float64)
+        ctrl1 = np.array(splineB.ctrlpts, dtype=np.float64)
         return (theta * ctrl1 + (1 - theta) * ctrl0).tolist()
 
     t_yr_steps = np.linspace(0.0, t_final_yr, n_slab_steps + 1)
     dt = slab_data.t_yr_to_ndim(t_yr_steps[1] - t_yr_steps[0])
-    mesh0, T_data0, u_data0 = solve_slab_problem(
-        input_directory / f"subduction_zone_{0:{idx_fmt}}.xdmf")
-    Th0_mesh0 = T_data0[0]
 
     def xdmf_interpolator(u):
         mesh = u.function_space.mesh
@@ -287,23 +287,28 @@ if __name__ == "__main__":
         return u_mesh
 
     for i, t_yr in enumerate(t_yr_steps):
-        mesh0, T_data0, u_data0 = solve_slab_problem(
-            input_directory / f"subduction_zone_{i:{idx_fmt}}.xdmf",
-            Th0_mesh0=Th0_mesh0, dt=dt)
-        Th0_mesh0 = T_data0[0]
-        uh_mesh0 = u_data0[0]
-        with dolfinx.io.XDMFFile(
-                mesh0.comm,
-                output_directory / f"temperature{i:{idx_fmt}}.xdmf",
-                "w") as fi:
-            fi.write_mesh(Th0_mesh0.function_space.mesh)
-            fi.write_function(xdmf_interpolator(Th0_mesh0), t=t_yr / 1e6)
-        # quit()
-        # with dolfinx.io.VTXWriter(
-        #         mesh0.comm, output_directory / f"temperature_{i:{idx_fmt}}.bp",
-        #         Th0_mesh0, "bp4") as f:
-        #     f.write(t_yr / 1e6)
-        # with dolfinx.io.VTXWriter(
-        #         mesh0.comm, output_directory / f"velocity_{i:{idx_fmt}}.bp",
-        #         uh_mesh0, "bp4") as f:
-        #     f.write(t_yr / 1e6)
+        if i == 0:
+            mesh0, T_data0, u_data0 = solve_slab_problem(
+                input_directory / f"subduction_zone_{0:{idx_fmt}}.xdmf")
+            Th0_mesh0 = T_data0[0]
+        else:
+            theta = t_yr / t_final_yr
+            theta0 = t_yr_steps[i - 1] / t_final_yr
+            slab_spline.ctrlpts = ctrl_pt_transfer_fn(
+                slab_spline_t0, slab_spline_tfinal, theta)
+            slab_spline_m.ctrlpts = ctrl_pt_transfer_fn(
+                slab_spline_t0, slab_spline_tfinal, theta0)
+
+            mesh0, T_data0, u_data0 = solve_slab_problem(
+                input_directory / f"subduction_zone_{i:{idx_fmt}}.xdmf",
+                Th0_mesh0=Th0_mesh0, dt=dt, slab_spline=slab_spline,
+                slab_spline_m=slab_spline_m)
+
+            Th0_mesh0 = T_data0[0]
+            uh_mesh0 = u_data0[0]
+            with dolfinx.io.XDMFFile(
+                    mesh0.comm,
+                    output_directory / f"temperature{i:{idx_fmt}}.xdmf",
+                    "w") as fi:
+                fi.write_mesh(Th0_mesh0.function_space.mesh)
+                fi.write_function(xdmf_interpolator(Th0_mesh0), t=t_yr / 1e6)
