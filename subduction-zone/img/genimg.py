@@ -16,7 +16,6 @@ with adios2.open("../temperature.bp", "r", MPI.COMM_SELF) as fh:
 		topo = fstep.read("connectivity")
 		x = fstep.read("geometry")
 
-
 with h5py.File("../subduction_zone.h5", "r") as fi:
 	facets = fi["MeshTags"]["zone_facets"]["topology"][:]
 	x_xdmf = fi["Mesh"]["zone"]["geometry"][:]

@@ -1,13 +1,10 @@
 from mpi4py import MPI
 from petsc4py import PETSc
 import numpy as np
-import dolfinx
 import dolfinx.fem.petsc
 import ufl
 
-import mesh_generator
-import model
-import solvers
+from sz import model, solvers
 
 
 def print0(*args):
@@ -15,23 +12,23 @@ def print0(*args):
 
 
 slab_data = model.SlabData()
-Labels = mesh_generator.Labels
+Labels = model.Labels
 
 # Read meshes and partition over all processes
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "subduction_zone.xdmf", "r") as fi:
     mesh = fi.read_mesh(
-        name="zone", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+        name="zone", ghost_mode=dolfinx.mesh.GhostMode.none)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
     facet_tags = fi.read_meshtags(mesh, name="zone_facets")
     cell_tags = fi.read_meshtags(mesh, name="zone_cells")
 
     wedge_mesh = fi.read_mesh(
-        name="wedge", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+        name="wedge", ghost_mode=dolfinx.mesh.GhostMode.none)
     wedge_mesh.topology.create_connectivity(wedge_mesh.topology.dim - 1, 0)
     wedge_facet_tags = fi.read_meshtags(wedge_mesh, name="wedge_facets")
 
     slab_mesh = fi.read_mesh(
-        name="slab", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
+        name="slab", ghost_mode=dolfinx.mesh.GhostMode.none)
     slab_mesh.topology.create_connectivity(slab_mesh.topology.dim - 1, 0)
     slab_facet_tags = fi.read_meshtags(slab_mesh, name="slab_facets")
 
