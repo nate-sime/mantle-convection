@@ -48,7 +48,8 @@ def generate_disk(comm: MPI.Intracomm,
 
 def generate_cylinder(comm: MPI.Intracomm,
                       geom_degree: int = 1,
-                      gmsh_opts: dict[[str, [str, int, float]]] = {}):
+                      gmsh_opts: dict[[str, [str, int, float]]] = {},
+                      annulus: bool = False):
     gmsh.initialize()
     if comm.rank == 0:
         gmsh.model.add("cylinder")
@@ -56,12 +57,16 @@ def generate_cylinder(comm: MPI.Intracomm,
         dz = 1
         r0 = 0.25
         r1 = 2.0
-        cylinder1 = gmsh.model.occ.addCylinder(
-            0, 0, 0, 0, 0, dz, r1)
-        cylinder0 = gmsh.model.occ.addCylinder(
-            0, 0, -dz, 0, 0, 2*dz, r0)
-        annulus = gmsh.model.occ.cut([(3, cylinder1)], [(3, cylinder0)],
-                                     removeObject=True, removeTool=True)
+        if annulus:
+            cylinder1 = gmsh.model.occ.addCylinder(
+                0, 0, 0, 0, 0, dz, r1)
+            cylinder0 = gmsh.model.occ.addCylinder(
+                0, 0, -dz, 0, 0, 2*dz, r0)
+            annulus = gmsh.model.occ.cut([(3, cylinder1)], [(3, cylinder0)],
+                                         removeObject=True, removeTool=True)
+        else:
+            cylinder1 = gmsh.model.occ.addCylinder(
+                0, 0, 0, 0, 0, dz, r1)
         gmsh.model.occ.synchronize()
 
         volumes = gmsh.model.getEntities(3)
@@ -95,19 +100,19 @@ def generate_cylinder(comm: MPI.Intracomm,
 
 
 if __name__ == "__main__":
-    # mesh_name = "disk"
-    # mesh, cell_tags, facet_tags = generate_disk(
-    #     MPI.COMM_WORLD, geom_degree=2, gmsh_opts={
-    #         "Mesh.RecombinationAlgorithm": 2,
-    #         "Mesh.RecombineAll": 2,
-    #         "Mesh.CharacteristicLengthFactor": 0.1
-    #     })
-
-    mesh_name = "cylinder"
-    mesh, cell_tags, facet_tags = generate_cylinder(
-        MPI.COMM_WORLD, geom_degree=1, gmsh_opts={
-            "Mesh.CharacteristicLengthFactor": 0.25
-        })
+    mesh_name = "disk"
+    if mesh_name == "disk":
+        mesh, cell_tags, facet_tags = generate_disk(
+            MPI.COMM_WORLD, geom_degree=2, gmsh_opts={
+                "Mesh.RecombinationAlgorithm": 2,
+                "Mesh.RecombineAll": 2,
+                "Mesh.CharacteristicLengthFactor": 0.1
+            })
+    elif mesh_name == "cylinder":
+        mesh, cell_tags, facet_tags = generate_cylinder(
+            MPI.COMM_WORLD, geom_degree=2, gmsh_opts={
+                "Mesh.CharacteristicLengthFactor": 0.25
+            })
 
     cell_tags.name = "cells"
     facet_tags.name = "facets"

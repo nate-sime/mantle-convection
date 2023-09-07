@@ -19,7 +19,7 @@ def print0(*args):
     PETSc.Sys.Print(", ".join(map(str, args)))
 
 
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "cylinder.xdmf", "r") as fi:
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "disk.xdmf", "r") as fi:
     mesh = fi.read_mesh(
         name="mesh", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
@@ -33,11 +33,16 @@ h_on_delta = dolfinx.fem.Constant(mesh, 4.0)
 eta_0 = dolfinx.fem.Constant(mesh, 1.0)
 phi_0 = dolfinx.fem.Constant(mesh, 0.05)
 alpha = dolfinx.fem.Constant(mesh, -27.0)
-n = dolfinx.fem.Constant(mesh, 2.0)
-nexp = (1 - n) / n
 m = dolfinx.fem.Constant(mesh, 1.0)
 ghat = dolfinx.fem.Constant(mesh, [0.0] * mesh.topology.dim)
 face_n = ufl.FacetNormal(mesh)
+
+# Strainrate exponent. The target value will be approached using a continuation
+# method prior to simulation. The value with which n is initialised will be
+# the initial step in the linear continuation process.
+n_val_target = 4.0
+n = dolfinx.fem.Constant(mesh, 2.0)
+nexp = (1 - n) / n
 
 # Function spaces
 p = 2
@@ -61,15 +66,6 @@ count_dofs = lambda V: V.dofmap.index_map.size_global * V.dofmap.index_map_bs
 print0(f"Problem dim: (Qc: {count_dofs(QC):,} "
        f"Phi: {count_dofs(PHI):,} Q: {count_dofs(Q):,} V: {count_dofs(V):,})")
 
-# u_0_state = (4.0 if mesh.geometry.dim == 3 else 4.0) / r0
-# angular_flow_acw_bc = Function(V)
-# def flow_acw(x):
-#     if mesh.geometry.dim == 2:
-#         return u_0_state * np.row_stack((-x[1], x[0]))
-#     else:
-#         return u_0_state * np.row_stack((-x[2] * x[1], x[2] * x[0], np.zeros_like(x[0])))
-# angular_flow_acw_bc.interpolate(flow_acw)
-
 # Boundary conditions
 def rot_flow(x: np.ndarray, direction: int):
     assert direction in (1, 2)
@@ -82,10 +78,10 @@ def rot_flow(x: np.ndarray, direction: int):
 
 if mesh.topology.dim == 2:
     u_inner = dolfinx.fem.Function(V)
-    u_inner.interpolate(lambda x: rot_flow(x, 1))
+    u_inner.interpolate(lambda x: 0.0*rot_flow(x, 1))
     u_inner.x.scatter_forward()
     u_outer = dolfinx.fem.Function(V)
-    u_outer.interpolate(lambda x: 2.0*rot_flow(x, 2))
+    u_outer.interpolate(lambda x: rot_flow(x, 2))
     u_outer.x.scatter_forward()
 
     facets_inner = facet_tags.indices[facet_tags.values == Labels.inner_face]
@@ -100,44 +96,31 @@ if mesh.topology.dim == 2:
 
     bcs_V = [bc_top, bc_bottom]
 elif mesh.topology.dim == 3:
-    u_top = dolfinx.fem.Function(V)
-    u_top.interpolate(lambda x: 4.0 / 1.5 *rot_flow(x, 1))
-    u_top.x.scatter_forward()
-    u_bot = dolfinx.fem.Function(V)
-    u_bot.vector.set(0.0)
-    u_bot.x.scatter_forward()
+    max_h = 1.0
+    u_bdry = dolfinx.fem.Function(V)
+    u_bdry.interpolate(lambda x: 8.0 / 3.0 * rot_flow(x, 1) * (x[2] / max_h))
+    u_bdry.x.scatter_forward()
 
-    facets_top = facet_tags.indices[facet_tags.values == Labels.cyl_top_face]
-    bc_top = dolfinx.fem.dirichletbc(
-        u_top, dolfinx.fem.locate_dofs_topological(
-            V, mesh.topology.dim - 1, facets_top))
+    facets_ext = dolfinx.mesh.locate_entities_boundary(
+        mesh, mesh.topology.dim - 1,
+        lambda x: np.ones_like(x[0], dtype=np.int8))
+    u_bc = dolfinx.fem.dirichletbc(
+        u_bdry, dolfinx.fem.locate_dofs_topological(
+            V, mesh.topology.dim - 1, facets_ext))
 
-    facets_bot = facet_tags.indices[facet_tags.values == Labels.cyl_bot_face]
-    bc_bottom = dolfinx.fem.dirichletbc(
-        u_bot, dolfinx.fem.locate_dofs_topological(
-            V, mesh.topology.dim - 1, facets_bot))
+    bcs_V = [u_bc]
 
-    bcs_V = [bc_top, bc_bottom]
+h = dolfinx.fem.Function(dolfinx.fem.FunctionSpace(mesh, ("DG", 0)))
+h.vector.array[:] = dolfinx.cpp.mesh.h(
+    mesh._cpp_object, mesh.topology.dim, np.arange(
+        mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32))
 
-# if mesh.geometry.dim == 3:
-    # bcs = [DirichletBC(V, angular_flow_acw_bc, boundary_top),
-    #        DirichletBC(V, angular_flow_acw_bc, boundary_bottom)]
-# else:
-#     angular_flow_cw_bc = Function(V)
-#     flow_cw = lambda x: 0.95 * u_0_state * np.row_stack((x[1], -x[0]))
-#     angular_flow_cw_bc.interpolate(flow_cw)
-#
-#     bcs = [DirichletBC(V, angular_flow_acw_bc, boundary_outer),
-#            DirichletBC(V, angular_flow_cw_bc, boundary_inner)]
-
-max_t = 1.4
 h_measure = dolfinx.cpp.mesh.h(
     mesh._cpp_object, mesh.topology.dim, np.arange(
         mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32))
 hmin = mesh.comm.allreduce(h_measure.min(), op=MPI.MIN)
 dt = dolfinx.fem.Constant(mesh, 1.25e-1 * hmin)
 t = dolfinx.fem.Constant(mesh, 0.0)
-n_t_steps = int(max_t/dt.value)
 
 # Theta scheme
 u_th = 0.5*(u + u_n)
@@ -164,19 +147,21 @@ xi = eta(u_th, phi_th)*(zeta - 2.0/3.0*phi_0**m)
 f1 = (
         (phi - phi_n) * psi * dx
         + dt * (
-                ufl.dot(u_th, ufl.grad(phi_th))*psi*dx
-                - phi_0**(m-1)*(1 - phi_0*phi_th) * p_c_th / xi * psi * dx
+                ufl.inner(u_th, ufl.grad(phi_th))*psi*dx
+                - ufl.inner(phi_0**(m-1)*(1 - phi_0*phi_th) * p_c_th / xi,  psi) * dx
         )
 )
 f2 = (
-        ufl.dot(K * (ufl.grad(p_c_th) + ufl.grad(p_th)), ufl.grad(q_c)) * dx
-        + h_on_delta ** 2 * p_c_th / xi * q_c * dx
+        ufl.inner(K * (ufl.grad(p_c) + ufl.grad(p)), ufl.grad(q_c)) * dx
+        + ufl.inner(h_on_delta ** 2 * p_c / xi, q_c) * dx
 )
 f3 = (
-        ufl.inner(sigma(u_th, phi_th), eps(v))*dx
-        - p_th*ufl.div(v)*dx
+        ufl.inner(sigma(u, phi), eps(v))*dx - ufl.inner(p, ufl.div(v))*dx
 )
-f4 = -ufl.div(u_th)*q*dx + phi_0**m*p_c_th/xi*q*dx
+f4 = (
+        -ufl.inner(ufl.div(u), q)*dx
+        + ufl.inner(phi_0**m*p_c/xi, q)*dx
+)
 
 # Collect solution variables and matrices
 F = [f1, f2, f3, f4]
@@ -255,18 +240,19 @@ else:
         sub_vec.ghostUpdate(addv=PETSc.InsertMode.INSERT,
                             mode=PETSc.ScatterMode.FORWARD)
 
+# Setup solvers
 snes = PETSc.SNES().create(mesh.comm)
 snes.setTolerances(atol=1e-7, max_it=200)
 
 if matrix_type is MatrixType.block:
+    # For the monolithic blocked problem employ direct solver, intended for 2D
     snes.getKSP().setType("preonly")
     snes.getKSP().getPC().setType("lu")
     snes.getKSP().getPC().setFactorSolverType("mumps")
 else:
+    # Approximate method for nested matrices, intended for 3D
     nested_IS = Jmat.getNestISs()
-
     snes.getKSP().setType("fgmres")
-    # snes.getKSP().setTolerances(rtol=1e-12)
     snes.getKSP().getPC().setType("fieldsplit")
     snes.getKSP().getPC().setFieldSplitType(PETSc.PC.CompositeType.SYMMETRIC_MULTIPLICATIVE)
     snes.getKSP().getPC().setFieldSplitIS(["phi", nested_IS[0][0]],
@@ -275,25 +261,22 @@ else:
                                           ["p", nested_IS[0][3]])
 
     ksp_phi, ksp_p_c, ksp_u, ksp_p = snes.getKSP().getPC().getFieldSplitSubKSP()
-
     ksp_phi.setType("gmres")
-    ksp_phi.getPC().setType('hypre')
-    # ksp_phi.getPC().setFactorSolverType('mumps')
+    ksp_phi.getPC().setType('bjacobi')
     ksp_p_c.setType("gmres")
-    ksp_p_c.getPC().setType('hypre')
-    # ksp_p_c.getPC().setFactorSolverType('mumps')
-
-    ksp_u.setType("gmres")
+    ksp_p_c.getPC().setType('bjacobi')
+    ksp_u.setType("preonly")
     ksp_u.getPC().setType('hypre')
-    # ksp_u.getPC().setFactorSolverType('mumps')
     ksp_p.setType("gmres")
-    ksp_p.getPC().setType('hypre')
-    # ksp_p.getPC().setFactorSolverType('mumps')
+    ksp_p.getPC().setType('bjacobi')
 
 opts = PETSc.Options()
 opts["snes_monitor"] = None
 if matrix_type is MatrixType.nest:
     opts["ksp_monitor"] = None
+    opts["ksp_rtol"] = 1e-6
+    opts["ksp_atol"] = 1e-8
+    opts["ksp_max_it"] = 50
 opts["snes_converged_reason"] = None
 snes.setFromOptions()
 
@@ -305,11 +288,21 @@ u_spd = u.sub(0).collapse()
 u_spd_expr = dolfinx.fem.Expression(
     ufl.sqrt(u_n**2), u_spd.function_space.element.interpolation_points())
 
-
 with dolfinx.io.VTXWriter(mesh.comm, "output.bp", phi, "bp4") as fi:
     fi.write(0.0)
 
-    for j in range(n_t_steps):
+    # Initial continuation steps
+    if not np.isclose(n.value, n_val_target):
+        for un_, u_ in zip(Un, U):
+            un_.vector.array = u_.vector.array_r
+            un_.x.scatter_forward()
+        for n_val in np.linspace(2.0, n_val_target, 5):
+            PETSc.Sys.Print(f"Continuation: n_val = {n_val}")
+            n.value = n_val
+            snes.solve(None, x0)
+
+    for j in range(max_steps := 1000):
+        # Update previous time step variables
         for un_, u_ in zip(Un, U):
             un_.vector.array = u_.vector.array_r
             un_.x.scatter_forward()
@@ -317,13 +310,17 @@ with dolfinx.io.VTXWriter(mesh.comm, "output.bp", phi, "bp4") as fi:
         if j > 0:
             u_spd.interpolate(u_spd_expr)
             u_spd.x.scatter_forward()
-            dt.value = (c_cfl := 1.0) * hmin / u_spd.vector.max()[1]
-
+            dt.value = (c_cfl := 2.0) * hmin / u_spd.vector.max()[1]
         t.value = t.value + dt.value
-
-        print0(f"Time step: {j} of {n_t_steps}, "
+        print0(f"Time step: {j} of {max_steps}, "
                f"dt={dt.value:.3e}, t={t.value:.3e}")
 
+        # solver_utils.NonlinearPDE_SNESProblem handles ghosts and solution
+        # updates
         snes.solve(None, x0)
+
+        if snes.getConvergedReason() < 0:
+            PETSc.Sys.Print("SNES did not converge. Ending simulation.")
+            break
 
         fi.write(t.value)
