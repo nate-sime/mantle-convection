@@ -53,10 +53,15 @@ def generate_cylinder(comm: MPI.Intracomm,
     if comm.rank == 0:
         gmsh.model.add("cylinder")
 
-        dz = 0.5
-        r = 1.0
-        cylinder = gmsh.model.occ.addCylinder(
-            0, 0, 0, 0, 0, dz, r)
+        dz = 1
+        r0 = 0.25
+        r1 = 2.0
+        cylinder1 = gmsh.model.occ.addCylinder(
+            0, 0, 0, 0, 0, dz, r1)
+        cylinder0 = gmsh.model.occ.addCylinder(
+            0, 0, -dz, 0, 0, 2*dz, r0)
+        annulus = gmsh.model.occ.cut([(3, cylinder1)], [(3, cylinder0)],
+                                     removeObject=True, removeTool=True)
         gmsh.model.occ.synchronize()
 
         volumes = gmsh.model.getEntities(3)
@@ -69,12 +74,10 @@ def generate_cylinder(comm: MPI.Intracomm,
         top_idx = surfs[np.argmax(coms[:,2])][1]
         bot_idx = surfs[np.argmin(coms[:,2])][1]
         ext_idx = list(set(s[1] for s in surfs) - set([top_idx, bot_idx]))
-        assert len(ext_idx) == 1
-        ext_idx = ext_idx[0]
 
         gmsh.model.addPhysicalGroup(2, [top_idx], tag=Labels.cyl_top_face)
         gmsh.model.addPhysicalGroup(2, [bot_idx], tag=Labels.cyl_bot_face)
-        gmsh.model.addPhysicalGroup(2, [ext_idx], tag=Labels.cyl_ext_face)
+        gmsh.model.addPhysicalGroup(2, ext_idx, tag=Labels.cyl_ext_face)
 
         for opt_key, opt_val in gmsh_opts.items():
             gmsh.option.setNumber(opt_key, opt_val)
@@ -102,8 +105,8 @@ if __name__ == "__main__":
 
     mesh_name = "cylinder"
     mesh, cell_tags, facet_tags = generate_cylinder(
-        MPI.COMM_WORLD, geom_degree=2, gmsh_opts={
-            "Mesh.CharacteristicLengthFactor": 1.0
+        MPI.COMM_WORLD, geom_degree=1, gmsh_opts={
+            "Mesh.CharacteristicLengthFactor": 0.25
         })
 
     cell_tags.name = "cells"

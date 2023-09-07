@@ -19,14 +19,14 @@ def print0(*args):
     PETSc.Sys.Print(", ".join(map(str, args)))
 
 
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "disk.xdmf", "r") as fi:
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "cylinder.xdmf", "r") as fi:
     mesh = fi.read_mesh(
         name="mesh", ghost_mode=dolfinx.cpp.mesh.GhostMode.none)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
     facet_tags = fi.read_meshtags(mesh, name="facets")
 
 dx = ufl.dx(metadata={"quadrature_degree": 4})
-matrix_type = MatrixType.nest
+matrix_type = MatrixType.block
 
 # Material coefficients
 h_on_delta = dolfinx.fem.Constant(mesh, 4.0)
@@ -55,6 +55,7 @@ v, q, psi, q_c = map(ufl.TestFunction, (V, Q, PHI, QC))
 
 # Initial condition
 phi.interpolate(lambda x: 1.0 + 0.01*(0.5 - np.random.rand(x.shape[1])))
+phi.x.scatter_forward()
 
 count_dofs = lambda V: V.dofmap.index_map.size_global * V.dofmap.index_map_bs
 print0(f"Problem dim: (Qc: {count_dofs(QC):,} "
@@ -73,28 +74,50 @@ print0(f"Problem dim: (Qc: {count_dofs(QC):,} "
 def rot_flow(x: np.ndarray, direction: int):
     assert direction in (1, 2)
     direction_switch = (-1)**direction
-    cw = np.stack((direction_switch * x[1], - direction_switch * x[0]))
-    cw_norm = np.linalg.norm(cw, axis=0)
-    return cw / cw_norm
+    cw = [direction_switch * x[1], - direction_switch * x[0]]
+    cw += [np.zeros_like(x[0])] if mesh.topology.dim == 3 else []
+    cw = np.stack(cw)
+    # cw_norm = np.linalg.norm(cw, axis=0)
+    return cw #/ cw_norm
 
-u_inner = dolfinx.fem.Function(V)
-u_inner.interpolate(lambda x: rot_flow(x, 1))
-u_outer = dolfinx.fem.Function(V)
-u_outer.interpolate(lambda x: 2.0*rot_flow(x, 2))
-zero_vector = dolfinx.fem.Function(V)
-zero_vector.vector.set(0.0)
+if mesh.topology.dim == 2:
+    u_inner = dolfinx.fem.Function(V)
+    u_inner.interpolate(lambda x: rot_flow(x, 1))
+    u_inner.x.scatter_forward()
+    u_outer = dolfinx.fem.Function(V)
+    u_outer.interpolate(lambda x: 2.0*rot_flow(x, 2))
+    u_outer.x.scatter_forward()
 
-facets_inner = facet_tags.indices[facet_tags.values == Labels.inner_face]
-bc_top = dolfinx.fem.dirichletbc(
-    u_inner, dolfinx.fem.locate_dofs_topological(
-        V, mesh.topology.dim - 1, facets_inner))
+    facets_inner = facet_tags.indices[facet_tags.values == Labels.inner_face]
+    bc_top = dolfinx.fem.dirichletbc(
+        u_inner, dolfinx.fem.locate_dofs_topological(
+            V, mesh.topology.dim - 1, facets_inner))
 
-facets_outer = facet_tags.indices[facet_tags.values == Labels.outer_face]
-bc_bottom = dolfinx.fem.dirichletbc(
-    u_outer, dolfinx.fem.locate_dofs_topological(
-        V, mesh.topology.dim - 1, facets_outer))
+    facets_outer = facet_tags.indices[facet_tags.values == Labels.outer_face]
+    bc_bottom = dolfinx.fem.dirichletbc(
+        u_outer, dolfinx.fem.locate_dofs_topological(
+            V, mesh.topology.dim - 1, facets_outer))
 
-bcs_V = [bc_top, bc_bottom]
+    bcs_V = [bc_top, bc_bottom]
+elif mesh.topology.dim == 3:
+    u_top = dolfinx.fem.Function(V)
+    u_top.interpolate(lambda x: 4.0 / 1.5 *rot_flow(x, 1))
+    u_top.x.scatter_forward()
+    u_bot = dolfinx.fem.Function(V)
+    u_bot.vector.set(0.0)
+    u_bot.x.scatter_forward()
+
+    facets_top = facet_tags.indices[facet_tags.values == Labels.cyl_top_face]
+    bc_top = dolfinx.fem.dirichletbc(
+        u_top, dolfinx.fem.locate_dofs_topological(
+            V, mesh.topology.dim - 1, facets_top))
+
+    facets_bot = facet_tags.indices[facet_tags.values == Labels.cyl_bot_face]
+    bc_bottom = dolfinx.fem.dirichletbc(
+        u_bot, dolfinx.fem.locate_dofs_topological(
+            V, mesh.topology.dim - 1, facets_bot))
+
+    bcs_V = [bc_top, bc_bottom]
 
 # if mesh.geometry.dim == 3:
     # bcs = [DirichletBC(V, angular_flow_acw_bc, boundary_top),
@@ -293,6 +316,7 @@ with dolfinx.io.VTXWriter(mesh.comm, "output.bp", phi, "bp4") as fi:
 
         if j > 0:
             u_spd.interpolate(u_spd_expr)
+            u_spd.x.scatter_forward()
             dt.value = (c_cfl := 1.0) * hmin / u_spd.vector.max()[1]
 
         t.value = t.value + dt.value
