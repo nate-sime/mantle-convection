@@ -5,15 +5,15 @@ from petsc4py import PETSc
 import numpy as np
 from scipy.special import sph_harm
 import ufl
+from ufl import (
+    dot, inner, outer, div, grad,
+    TrialFunction, TestFunction, FacetNormal
+)
+
 import mesh_generator
 
 
 def run_mantle_convection():
-    from ufl import (
-        dot, inner, outer, div, grad,
-        TrialFunction, TestFunction, FacetNormal
-    )
-
     # We define some simulation parameters
     r0 = 1.208318891
     r1 = r0 + 1.0
@@ -237,7 +237,7 @@ def run_mantle_convection():
 
     writer = io.VTXWriter(msh.comm, "output_T.bp", T_n)
 
-    for n in range(num_time_steps := 10):
+    for n in range(num_time_steps := 20):
         PETSc.Sys.Print(
             f"step {n} of {num_time_steps}, dt = {delta_t.value:.3e}")
         t += delta_t.value
