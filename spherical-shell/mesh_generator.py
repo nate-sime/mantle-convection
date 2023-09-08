@@ -57,7 +57,7 @@ def generate_spherical_shell_gmsh(
 
 def generate_box(comm: MPI.Intracomm, coords: list, n: list, order: int,
                  gen_on_rank: int=0):
-    """Generate a box mesh of arbitrary degree
+    """Generate a box mesh of arbitrary geometry degree
 
     Args:
         comm: MPI communicator
@@ -92,7 +92,6 @@ def generate_box(comm: MPI.Intracomm, coords: list, n: list, order: int,
         geom = pts[idx]
 
         np_x, np_y, np_z = (order * nx + 1), (order * ny + 1), (order * nz + 1)
-        n_pts = np_x * np_y * np_z
 
         cells = []
         for i in range(n_cells):
@@ -100,15 +99,6 @@ def generate_box(comm: MPI.Intracomm, coords: list, n: list, order: int,
             j = i % (nx * ny)
             iy = j // (nx)
             ix = j % (nx)
-
-            v0 = (iz * (ny + 1) + iy) * (nx + 1) + ix  # Corner of cell
-            v1 = v0 + 1  # Move along x
-            v2 = v0 + (nx + 1)  # Move into y
-            v3 = v1 + (nx + 1)
-            v4 = v0 + (nx + 1) * (ny + 1)  # Move into z
-            v5 = v1 + (nx + 1) * (ny + 1)
-            v6 = v2 + (nx + 1) * (ny + 1)
-            v7 = v3 + (nx + 1) * (ny + 1)
 
             v0 = order * iz * np_y * np_x + order * iy * np_x + ix * order
 
@@ -227,6 +217,8 @@ def generate_sectant_cap(comm: MPI.Intracomm, r0: float, r1: float, n: list,
 
 
 if __name__ == "__main__":
-    mesh, _, _ = generate_sectant_cap(MPI.COMM_WORLD, 1.0, 2.0, [2, 2, 2], 2)
+    r0 = 1.208318891
+    r1 = r0 + 1.0
+    mesh, _, _ = generate_sectant_cap(MPI.COMM_WORLD, r0, r1, [12, 12, 12], 2)
     with dolfinx.io.VTXWriter(mesh.comm, "mesh.bp", mesh) as fi:
         fi.write(0.0)
