@@ -10,7 +10,7 @@ convection model.
 Let $\Omega$ be the domain of interest with boundary
 $\partial \Omega$ with outward pointing unit vector $\vec{n}$
 and tangential unit vectors $\vec{\tau}_i$, $i=1,2$.
-In $\Omega$ we seek finite element approximation of velocity, pressure
+In $\Omega$ we seek the finite element approximation of velocity, pressure
 and temperature, $\vec{u}$, $p$ and $T$, respectively, such that
 
 $$
