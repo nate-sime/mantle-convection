@@ -198,7 +198,7 @@ cell_collided = dolfinx.geometry.compute_colliding_cells(
 T_6060 = None
 if len(cell_collided) > 0:
     T_6060 = Th.eval(
-        points6060, cell_collided[0])[0] - slab_data.Ts
+        points6060, cell_collided[0])[0] - 273.15
 T_6060 = mesh.comm.gather(T_6060, root=0)
 
 if mesh.comm.rank == 0:
