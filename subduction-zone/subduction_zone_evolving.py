@@ -19,7 +19,19 @@ slab_data = model.SlabData()
 Labels = model.Labels
 
 
-def populate_dg0_marker(marker, cell_tags):
+def populate_dg0_marker(marker: dolfinx.fem.Function,
+                        cell_tags: dolfinx.mesh.MeshTags):
+    """
+    Transfer the values of cell tags into a DG0 space. The cell tag values will
+    be cast as floating point numbers.
+
+    Args:
+        marker: A DG0 space defined on the same mesh as the cell tags
+        cell_tags: The cell tags to be transferred
+
+    Returns:
+    A DG0 FE function with values transferred from the cell tags
+    """
     unique_values = np.unique(cell_tags.values)
     c = dolfinx.fem.Constant(marker.function_space.mesh, 0.0)
     c_expr = dolfinx.fem.Expression(
@@ -37,7 +49,23 @@ def solve_slab_problem(
         slab_spline: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
         slab_spline_m: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
         all_domains_overlap: bool = False):
+    """
+    Solve the evolving subduction zone model at a given time step.
 
+    Args:
+        file_path: Path to the XDMF mesh file
+        Th0_mesh0: Previous time step's temperature field defined on the
+         previous time step's mesh
+        dt: Time step size
+        slab_spline: Current time step slab interface spline
+        slab_spline_m: Previous time step slab interface spline
+        all_domains_overlap: If both the previous and current time step's
+         computational domains fully overlap, set to True such that unnecessary
+         computation of non-overlapping mesh interpolation may be ingored.
+
+    Returns:
+    Subduction zone temperature and velocity data snapshot.
+    """
     if ((slab_spline is None) ^ (slab_spline_m is None)
             ^ (Th0_mesh0 is None) ^ (dt is None)):
         raise RuntimeError(
