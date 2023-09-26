@@ -9,7 +9,7 @@ import gmsh
 import numpy as np
 
 from sz.model import Labels
-from sz.mesh_utils import extract_submesh_and_transfer_facets
+from sz.mesh_utils import extract_submesh_and_transfer_meshtags
 
 
 def generate(comm: MPI.Intracomm,
@@ -217,11 +217,11 @@ if __name__ == "__main__":
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
 
-    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_facets(
+    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.wedge])
     wedge_facet_tags.name = "wedge_facets"
     wedge_mesh.name = "wedge"
-    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_facets(
+    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.slab])
     slab_facet_tags.name = "slab_facets"
     slab_mesh.name = "slab"

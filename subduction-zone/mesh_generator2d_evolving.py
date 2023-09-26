@@ -7,7 +7,7 @@ import geomdl.abstract
 import geomdl.exchange
 from mpi4py import MPI
 
-from sz.mesh_utils import extract_submesh_and_transfer_facets
+from sz.mesh_utils import extract_submesh_and_transfer_meshtags
 from sz.model import Labels
 
 import mesh_generator2d
@@ -32,11 +32,20 @@ def generate_mesh_step(comm: MPI.Intracomm,
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
 
-    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_facets(
+    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.wedge])
     wedge_facet_tags.name = "wedge_facets"
     wedge_mesh.name = "wedge"
-    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_facets(
+
+    wedgeplate_mesh, (wedgeplate_facet_tags, wedgeplate_cell_tags) = \
+        extract_submesh_and_transfer_meshtags(
+            mesh, [facet_tags, cell_tags], cell_tags.indices[
+                np.isin(cell_tags.values, (Labels.wedge, Labels.plate))])
+    wedgeplate_facet_tags.name = "wedgeplate_facets"
+    wedgeplate_cell_tags.name = "wedgeplate_cells"
+    wedgeplate_mesh.name = "wedgeplate"
+
+    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.slab])
     slab_facet_tags.name = "slab_facets"
     slab_mesh.name = "slab"
@@ -54,6 +63,14 @@ def generate_mesh_step(comm: MPI.Intracomm,
         fi.write_meshtags(
             wedge_facet_tags, wedge_mesh.geometry,
             geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedge_mesh.name}']/Geometry")
+
+        fi.write_mesh(wedgeplate_mesh)
+        fi.write_meshtags(
+            wedgeplate_facet_tags, wedgeplate_mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedgeplate_mesh.name}']/Geometry")
+        fi.write_meshtags(
+            wedgeplate_cell_tags, wedgeplate_mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedgeplate_mesh.name}']/Geometry")
 
         fi.write_mesh(slab_mesh)
         fi.write_meshtags(
