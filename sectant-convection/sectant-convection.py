@@ -6,7 +6,7 @@ import numpy as np
 from scipy.special import sph_harm
 import ufl
 from ufl import (
-    dot, inner, outer, div, grad,
+    dot, inner, outer, div, grad, sym,
     TrialFunction, TestFunction, FacetNormal
 )
 
@@ -64,13 +64,14 @@ def run_mantle_convection():
 
     # Free slip Stokes formulation with interior penalty parameter, alpha
     n = FacetNormal(msh)
-    alpha = fem.Constant(msh, PETSc.ScalarType(6.0 * k**2))
+    alpha = fem.Constant(msh, PETSc.ScalarType(20.0 * k**2))
 
-    a_00 = mu * (
-            inner(grad(u), grad(v)) * dx
-            - inner(grad(u), outer(dot(v, n) * n, n)) * ds
-            - inner(outer(dot(u, n) * n, n), grad(v)) * ds
-            + alpha / h * inner(outer(dot(u, n) * n, n), outer(v, n)) * ds)
+    a_00 = (
+            inner(2 * mu * sym(grad(u)), sym(grad(v))) * dx
+            - inner(2 * mu * sym(grad(u)), outer(dot(v, n) * n, n)) * ds
+            - inner(outer(dot(u, n) * n, n), 2 * mu * sym(grad(v))) * ds
+            + 2 * mu * alpha / h * inner(outer(dot(u, n) * n, n), outer(v, n)) * ds)
+
     a_01 = - inner(p, div(v)) * dx + inner(p, dot(v, n)) * ds
     a_10 = - inner(div(u), q) * dx + inner(dot(u, n), q) * ds
 
@@ -234,57 +235,69 @@ def run_mantle_convection():
     # Parameters used for CFL criterion estimate
     u_spd_expr = fem.Expression(
         ufl.sqrt(u_h**2), u_spd.function_space.element.interpolation_points())
+    fs_norm_form = fem.form(dot(u_h, n)**2 * ds)
 
-    writer = io.VTXWriter(msh.comm, "output_T.bp", T_n)
+    with io.VTXWriter(msh.comm, f"output.bp", [u_h, T_n]) as writer:
+        Nu_t_old = -1.0
+        for n in range(num_time_steps := 200):
+            PETSc.Sys.Print(
+                f"step {n} of {num_time_steps}, dt = {delta_t.value:.3e}")
+            t += delta_t.value
 
-    for n in range(num_time_steps := 20):
-        PETSc.Sys.Print(
-            f"step {n} of {num_time_steps}, dt = {delta_t.value:.3e}")
-        t += delta_t.value
+            with b.localForm() as b_loc:
+                b_loc.set(0)
+            fem.petsc.assemble_vector_block(b, L, a)
 
-        with b.localForm() as b_loc:
-            b_loc.set(0)
-        fem.petsc.assemble_vector_block(b, L, a)
+            # The Stokes operator need only be constructed once
+            if n > 0:
+                ksp.getPC().setReusePreconditioner(True)
 
-        # The Stokes operator need only be constructed once
-        if n > 0:
-            ksp.getPC().setReusePreconditioner(True)
+            # Compute and scatter Stokes solution
+            ksp.solve(b, x)
+            u_h.x.array[:offset] = x.array_r[:offset]
+            u_h.x.scatter_forward()
+            p_h.x.array[:(len(x.array_r) - offset)] = x.array_r[offset:]
+            p_h.x.scatter_forward()
+            p_h.x.array[:] -= domain_average(msh, p_h)
 
-        # Compute and scatter Stokes solution
-        ksp.solve(b, x)
-        u_h.x.array[:offset] = x.array_r[:offset]
-        u_h.x.scatter_forward()
-        p_h.x.array[:(len(x.array_r) - offset)] = x.array_r[offset:]
-        p_h.x.scatter_forward()
-        p_h.x.array[:] -= domain_average(msh, p_h)
+            # Update dt according to CFL criterion estimate
+            u_spd.interpolate(u_spd_expr)
+            delta_t.value = (c_cfl := 2.0) * hmin / u_spd.vector.max()[1]
 
-        # Update dt according to CFL criterion estimate
-        u_spd.interpolate(u_spd_expr)
-        delta_t.value = (c_cfl := 2.0) * hmin / u_spd.vector.max()[1]
+            # Compute heat equation solution
+            A_T.zeroEntries()
+            fem.petsc.assemble_matrix(A_T, a_T, bcs=bcs_T)
+            A_T.assemble()
 
-        # Compute heat equation solution
-        A_T.zeroEntries()
-        fem.petsc.assemble_matrix(A_T, a_T, bcs=bcs_T)
-        A_T.assemble()
+            with b_T.localForm() as b_T_loc:
+                b_T_loc.set(0)
+            fem.petsc.assemble_vector(b_T, L_T)
+            fem.apply_lifting(b_T, [a_T], bcs=[bcs_T])
+            b_T.ghostUpdate(
+                addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+            fem.set_bc(b_T, bcs_T)
 
-        with b_T.localForm() as b_T_loc:
-            b_T_loc.set(0)
-        fem.petsc.assemble_vector(b_T, L_T)
-        fem.apply_lifting(b_T, [a_T], bcs=[bcs_T])
-        b_T.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-        fem.set_bc(b_T, bcs_T)
+            ksp_T.solve(b_T, T_n.vector)
+            T_n.x.scatter_forward()
 
-        ksp_T.solve(b_T, T_n.vector)
-        T_n.x.scatter_forward()
+            Nu_t, Nu_b = compute_nusselt()
+            fs_norm = msh.comm.allreduce(
+                fem.assemble_scalar(fs_norm_form),
+                op=MPI.SUM) ** 0.5
+            Nu_t_diff = abs(Nu_t - Nu_t_old) / abs(Nu_t_old)
+            PETSc.Sys.Print(f"t = {t:.3e}, "
+                            f"Nu_t = {Nu_t:.3e}, Nu_b = {Nu_b:.3e}, "
+                            f"<T> = {domain_average(msh, T_n):.3e}, "
+                            f"<u> = {domain_average(msh, dot(u_h, u_h))**0.5:.3e}, "
+                            f"|u.n| = {fs_norm}, "
+                            f"|Nu-Nu0|/Nu0 = {Nu_t_diff:.3e}")
 
-        Nu_t, Nu_b = compute_nusselt()
-        PETSc.Sys.Print(f"Nu_t = {Nu_t:.9e}, Nu_b = {Nu_b:.9e}, "
-                        f"<T> = {domain_average(msh, T_n):.9e}, "
-                        f"<u> = {domain_average(msh, dot(u_h, u_h))**0.5:.9e}")
+            writer.write(float(n))
 
-        writer.write(t)
-
-    writer.close()
+            if Nu_t_diff < 1e-6:
+                PETSc.Sys.Print(f"Converged.")
+                break
+            Nu_t_old = Nu_t
 
 
 if __name__ == "__main__":
