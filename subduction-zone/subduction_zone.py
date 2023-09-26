@@ -66,7 +66,7 @@ Th.name = "T"
 uh_wedge.name = "u"
 
 # Interpolation data to transfer the velocity on wedge/slab to the full mesh
-V_full = dolfinx.fem.VectorFunctionSpace(mesh, ("DG", p_order))
+V_full = dolfinx.fem.FunctionSpace(mesh, ("DG", p_order, (mesh.geometry.dim,)))
 uh_full = dolfinx.fem.Function(V_full, name="u_full")
 
 wedge_cells = cell_tags.indices[cell_tags.values == Labels.wedge]
@@ -198,7 +198,7 @@ cell_collided = dolfinx.geometry.compute_colliding_cells(
 T_6060 = None
 if len(cell_collided) > 0:
     T_6060 = Th.eval(
-        points6060, cell_collided[0])[0] - slab_data.Ts
+        points6060, cell_collided[0])[0] - 273.15
 T_6060 = mesh.comm.gather(T_6060, root=0)
 
 if mesh.comm.rank == 0:

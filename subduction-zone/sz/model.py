@@ -22,6 +22,10 @@ class Labels(enum.IntEnum):
     plate_right = 13
     free_slip = 14
 
+    def __str__(self):
+        return str(int(self))
+
+
 
 @dataclasses.dataclass
 class SlabData:

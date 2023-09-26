@@ -19,13 +19,53 @@ slab_data = model.SlabData()
 Labels = model.Labels
 
 
+def populate_dg0_marker(marker: dolfinx.fem.Function,
+                        cell_tags: dolfinx.mesh.MeshTags):
+    """
+    Transfer the values of cell tags into a DG0 space. The cell tag values will
+    be cast as floating point numbers.
+
+    Args:
+        marker: A DG0 space defined on the same mesh as the cell tags
+        cell_tags: The cell tags to be transferred
+
+    Returns:
+    A DG0 FE function with values transferred from the cell tags
+    """
+    unique_values = np.unique(cell_tags.values)
+    c = dolfinx.fem.Constant(marker.function_space.mesh, 0.0)
+    c_expr = dolfinx.fem.Expression(
+        c, marker.function_space.element.interpolation_points())
+    for val in unique_values:
+        c.value = float(val)
+        marker.interpolate(c_expr, cell_tags.indices[cell_tags.values == val])
+    marker.x.scatter_forward()
+    return marker
+
+
 def solve_slab_problem(
         file_path: pathlib.Path, Th0_mesh0: dolfinx.fem.Function = None,
         dt: float = None,
         slab_spline: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
         slab_spline_m: geomdl.abstract.Curve | geomdl.abstract.Surface = None,
         all_domains_overlap: bool = False):
+    """
+    Solve the evolving subduction zone model at a given time step.
 
+    Args:
+        file_path: Path to the XDMF mesh file
+        Th0_mesh0: Previous time step's temperature field defined on the
+         previous time step's mesh
+        dt: Time step size
+        slab_spline: Current time step slab interface spline
+        slab_spline_m: Previous time step slab interface spline
+        all_domains_overlap: If both the previous and current time step's
+         computational domains fully overlap, set to True such that unnecessary
+         computation of non-overlapping mesh interpolation may be ingored.
+
+    Returns:
+    Subduction zone temperature and velocity data snapshot.
+    """
     if ((slab_spline is None) ^ (slab_spline_m is None)
             ^ (Th0_mesh0 is None) ^ (dt is None)):
         raise RuntimeError(
@@ -40,9 +80,12 @@ def solve_slab_problem(
         cell_tags = fi.read_meshtags(mesh, name="zone_cells")
 
         wedge_mesh = fi.read_mesh(
-            name="wedge", ghost_mode=dolfinx.mesh.GhostMode.none)
+            name="wedgeplate", ghost_mode=dolfinx.mesh.GhostMode.none)
         wedge_mesh.topology.create_connectivity(wedge_mesh.topology.dim - 1, 0)
-        wedge_facet_tags = fi.read_meshtags(wedge_mesh, name="wedge_facets")
+        wedge_facet_tags = fi.read_meshtags(
+            wedge_mesh, name="wedgeplate_facets")
+        wedge_cell_tags = fi.read_meshtags(
+            wedge_mesh, name="wedgeplate_cells")
 
         slab_mesh = fi.read_mesh(
             name="slab", ghost_mode=dolfinx.mesh.GhostMode.none)
@@ -52,8 +95,10 @@ def solve_slab_problem(
     # Set up the Stokes and Heat problems in the full zone and its subdomains
     p_order = 2
     tdim = mesh.topology.dim
-    stokes_problem_wedge = solvers.Stokes(wedge_mesh, wedge_facet_tags, p_order)
-    stokes_problem_slab = solvers.Stokes(slab_mesh, slab_facet_tags, p_order)
+    stokes_problem_wedge = solvers.StokesEvolving(
+        wedge_mesh, wedge_facet_tags, p_order)
+    stokes_problem_slab = solvers.StokesEvolving(
+        slab_mesh, slab_facet_tags, p_order)
     heat_problem = solvers.Heat(mesh, facet_tags, p_order)
 
     match tdim:
@@ -83,10 +128,11 @@ def solve_slab_problem(
     uh_wedge.name = "u"
 
     # Interpolation data to transfer the velocity on wedge/slab to the full mesh
-    V_full = dolfinx.fem.VectorFunctionSpace(mesh, ("DG", p_order))
+    V_full = dolfinx.fem.FunctionSpace(
+        mesh, ("DG", p_order, (mesh.geometry.dim,)))
     uh_full = dolfinx.fem.Function(V_full, name="u_full")
 
-    wedge_cells = cell_tags.indices[cell_tags.values == Labels.wedge]
+    wedge_cells = cell_tags.indices[np.isin(cell_tags.values, (Labels.wedge, Labels.plate))]
     uh_wedge2full_interp_data = \
         dolfinx.fem.create_nonmatching_meshes_interpolation_data(
             uh_full.function_space.mesh.geometry,
@@ -124,7 +170,9 @@ def solve_slab_problem(
     # Initialise the solvers generating underlying matrices, vectors and KSPs.
     # The tangential velocity approximation for the BCs updates ghosts after
     # solving the projection inside solvers.tangent_approximation
-    if use_coupling_depth := False:
+    if use_coupling_depth := True:
+        # Ideally a coupling depth is employed such that spurious flow is not
+        # initiated in the plate.
         plate_y = dolfinx.fem.Constant(
             wedge_mesh, np.array(-50.0, dtype=np.float64))
         couple_y = dolfinx.fem.Constant(
@@ -143,15 +191,23 @@ def solve_slab_problem(
         import sz.spline_util
         sz.spline_util.slab_velocity_kdtree(
             slab_spline, slab_spline_m, slab_tangent_slab,
-            slab_facet_tags.indices[slab_facet_tags.values == Labels.slab_wedge],
+            slab_facet_tags.indices[np.isin(slab_facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))],
             dt, resolution=256)
         sz.spline_util.slab_velocity_kdtree(
             slab_spline, slab_spline_m, slab_tangent_wedge,
-            wedge_facet_tags.indices[wedge_facet_tags.values == Labels.slab_wedge],
+            wedge_facet_tags.indices[np.isin(wedge_facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))],
             dt, resolution=256)
 
+    # Design a viscosity that is discontinuous across the wedge-plate boundary
     eta_wedge_is_linear = True
-    eta_wedge = model.create_viscosity_isoviscous()
+    eta_wedge_marker = dolfinx.fem.Function(
+        dolfinx.fem.FunctionSpace(wedge_mesh, ("DG", 0)))
+    populate_dg0_marker(eta_wedge_marker, wedge_cell_tags)
+    in_plate = ufl.lt(abs(eta_wedge_marker - Labels.plate), 0.1)
+    def eta_wedge(u, T):
+        eta_wedge_val = model.create_viscosity_isoviscous()(u, T)
+        return ufl.conditional(in_plate, 1e5*eta_wedge_val, eta_wedge_val)
+
     eta_slab_is_linear = True
     eta_slab = model.create_viscosity_isoviscous()
     stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge,
@@ -280,7 +336,7 @@ def xdmf_interpolator(u):
     mesh_fam = mesh.ufl_domain().ufl_coordinate_element().family()
 
     u_mesh = dolfinx.fem.Function(dolfinx.fem.FunctionSpace(
-        mesh, (mesh_fam, mesh_p)))
+        mesh, (mesh_fam, mesh_p, u.ufl_shape)))
     u_mesh.interpolate(u)
     u_mesh.x.scatter_forward()
     return u_mesh
@@ -333,10 +389,17 @@ if __name__ == "__main__":
                 slab_spline_m=slab_spline_m)
 
         Th0_mesh0 = T_data0[0]
-        uh_mesh0 = u_data0[0]
+        uh_mesh0 = u_data0[2]
         with dolfinx.io.XDMFFile(
                 mesh0.comm,
                 output_directory / f"temperature_{i:{idx_fmt}}.xdmf",
                 "w") as fi:
             fi.write_mesh(Th0_mesh0.function_space.mesh)
             fi.write_function(xdmf_interpolator(Th0_mesh0), t=t_yr / 1e6)
+
+        with dolfinx.io.XDMFFile(
+                mesh0.comm,
+                output_directory / f"velocity_{i:{idx_fmt}}.xdmf",
+                "w") as fi:
+            fi.write_mesh(uh_mesh0.function_space.mesh)
+            fi.write_function(xdmf_interpolator(uh_mesh0), t=t_yr / 1e6)
