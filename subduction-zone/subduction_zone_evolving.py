@@ -83,7 +83,8 @@ def solve_slab_problem(
     uh_wedge.name = "u"
 
     # Interpolation data to transfer the velocity on wedge/slab to the full mesh
-    V_full = dolfinx.fem.VectorFunctionSpace(mesh, ("DG", p_order))
+    V_full = dolfinx.fem.FunctionSpace(
+        mesh, ("DG", p_order, (mesh.geometry.dim,)))
     uh_full = dolfinx.fem.Function(V_full, name="u_full")
 
     wedge_cells = cell_tags.indices[cell_tags.values == Labels.wedge]
