@@ -122,7 +122,8 @@ class Stokes:
         self.mesh = mesh
         self.facet_tags = facet_tags
         self.p_order = p_order
-        self.V = dolfinx.fem.VectorFunctionSpace(mesh, ("CG", p_order))
+        self.V = dolfinx.fem.FunctionSpace(
+            mesh, ("CG", p_order, (mesh.geometry.dim,)))
         self.Q = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order - 1))
 
     def init(self, uh, Th, eta, slab_velocity, use_iterative_solver):
@@ -259,6 +260,122 @@ class Stokes:
         offset = self.V.dofmap.index_map.size_local * self.V.dofmap.index_map_bs
         uh.x.array[:offset] = self.x_u.array_r[:offset]
         uh.x.scatter_forward()
+
+
+class StokesEvolving(Stokes):
+
+    def init(self, uh, Th, eta, slab_velocity, use_iterative_solver):
+        facet_tags = self.facet_tags
+        mesh = self.mesh
+        V, Q = self.V, self.Q
+
+        u, p = map(ufl.TrialFunction, (V, Q))
+        v, q = map(ufl.TestFunction, (V, Q))
+
+        def sigma(u, u0, T):
+            return 2 * eta(u0, T) * ufl.sym(ufl.grad(u))
+
+        a_u00 = ufl.inner(sigma(u, uh, Th), ufl.sym(ufl.grad(v))) * ufl.dx
+        a_u01 = - ufl.inner(p, ufl.div(v)) * ufl.dx
+        a_u10 = - ufl.inner(q, ufl.div(u)) * ufl.dx
+
+        # Free slip terms
+        n = ufl.FacetNormal(mesh)
+        h = ufl.CellDiameter(mesh)
+        ds = ufl.Measure("ds", subdomain_data=facet_tags)
+        alpha = dolfinx.fem.Constant(mesh, 20.0 * V.ufl_element().degree() ** 2)
+        ds_fs = ds((Labels.free_slip, Labels.plate_top))
+        a_u00 += - ufl.inner(sigma(u, uh, Th), ufl.outer(ufl.dot(v, n) * n, n)) * ds_fs\
+                 - ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), sigma(v, uh, Th)) * ds_fs\
+                 + 2 * eta(uh, Th) * alpha / h * ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), ufl.outer(v, n)) * ds_fs
+        a_u01 += ufl.inner(p, ufl.dot(v, n)) * ds_fs
+        a_u10 += ufl.inner(ufl.dot(u, n), q) * ds_fs
+
+        a_u = dolfinx.fem.form(
+            [[a_u00, a_u01],
+             [a_u10, None]])
+        a_p11 = dolfinx.fem.form(-eta(uh, Th)**-1 * ufl.inner(p, q) * ufl.dx)
+        a_p = [[a_u[0][0], a_u[0][1]],
+               [a_u[1][0], a_p11]]
+
+        f_u = dolfinx.fem.Constant(mesh, [0.0] * mesh.geometry.dim)
+        f_p = dolfinx.fem.Constant(mesh, 0.0)
+        L_u = dolfinx.fem.form(
+            [ufl.inner(f_u, v) * ufl.dx, ufl.inner(f_p, q) * ufl.dx])
+
+        # -- Stokes BCs
+        noslip = np.zeros(mesh.geometry.dim, dtype=PETSc.ScalarType)
+        # noslip_facets = facet_tags.indices[
+        #     facet_tags.values == Labels.plate_wedge]
+        # bc_plate = dolfinx.fem.dirichletbc(
+        #     noslip, dolfinx.fem.locate_dofs_topological(
+        #         V, mesh.topology.dim-1, noslip_facets), V)
+
+        facets = facet_tags.indices[
+            np.isin(facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))]
+        assert isinstance(slab_velocity, (np.ndarray, dolfinx.fem.Function))
+        if isinstance(slab_velocity, np.ndarray):
+            bc_slab = dolfinx.fem.dirichletbc(
+                slab_velocity, dolfinx.fem.locate_dofs_topological(
+                    V, mesh.topology.dim-1, facets), V)
+        elif isinstance(slab_velocity, dolfinx.fem.Function):
+            bc_slab = dolfinx.fem.dirichletbc(
+                slab_velocity, dolfinx.fem.locate_dofs_topological(
+                    V, mesh.topology.dim-1, facets))
+
+        # The plate BC goes last such that all dofs on the overriding plate
+        # have priority and therefore zero flow
+        self.bcs_u = [bc_slab]#, bc_plate]
+
+        # Stokes linear system and solver
+        self.a_u = a_u
+        self.a_p = a_p
+        self.L_u = L_u
+        self.A_u = dolfinx.fem.petsc.create_matrix_block(a_u)
+        self.P_u = dolfinx.fem.petsc.create_matrix_block(a_p)
+        self.b_u = dolfinx.fem.petsc.create_vector_block(L_u)
+
+        ksp_u = PETSc.KSP().create(mesh.comm)
+
+        V_map = V.dofmap.index_map
+        Q_map = Q.dofmap.index_map
+        offset_u = V_map.local_range[0] * V.dofmap.index_map_bs + \
+                   Q_map.local_range[0]
+        offset_p = offset_u + V_map.size_local * V.dofmap.index_map_bs
+        is_u = PETSc.IS().createStride(
+            V_map.size_local * V.dofmap.index_map_bs, offset_u, 1,
+            comm=PETSc.COMM_SELF)
+        is_p = PETSc.IS().createStride(
+            Q_map.size_local, offset_p, 1, comm=PETSc.COMM_SELF)
+        ksp_u.getPC().setFieldSplitIS(("u", is_u), ("p", is_p))
+
+        if use_iterative_solver:
+            ksp_u.setOperators(self.A_u, self.P_u)
+            ksp_u.setType("fgmres")
+            ksp_u.getPC().setType("fieldsplit")
+            ksp_u.getPC().setFieldSplitType(PETSc.PC.CompositeType.MULTIPLICATIVE)
+            ksp_u.getPC().setFieldSplitIS(("u", is_u), ("p", is_p))
+            ksp_u.setTolerances(rtol=1e-9)
+
+            monitor_n_digits = int(np.ceil(np.log10(ksp_u.max_it)))
+            def monitor(ksp, it, r):
+                PETSc.Sys.Print(f"{it: {monitor_n_digits}d}: {r:.3e}")
+
+            ksp_u_u, ksp_u_p = ksp_u.getPC().getFieldSplitSubKSP()
+            ksp_u.setMonitor(monitor)
+            ksp_u_u.setType("preonly")
+            ksp_u_u.getPC().setType("hypre")
+            ksp_u_p.setType("preonly")
+            ksp_u_p.getPC().setType("bjacobi")
+        else:
+            ksp_u.setOperators(self.A_u)
+            ksp_u.setType("preonly")
+            pc_u = ksp_u.getPC()
+            pc_u.setType("lu")
+            pc_u.setFactorSolverType("mumps")
+
+        self.ksp_u = ksp_u
+        self.x_u = self.A_u.createVecLeft()
 
 
 class Heat:

@@ -7,13 +7,22 @@ import geomdl.abstract
 import geomdl.exchange
 from mpi4py import MPI
 
-from sz.mesh_utils import extract_submesh_and_transfer_facets
+from sz.mesh_utils import extract_submesh_and_transfer_meshtags
 from sz.model import Labels
 
 import mesh_generator2d
 
 
 def plot_spline_matplotlib(spline, nu=64):
+    """
+    Utility function for plotting splines defined by geomdl. Useful for
+     debugging.
+
+    Args:
+        spline: Spline to plot
+        nu: Number of points equidistantly spaced in the reference domain to
+         plot
+    """
     import matplotlib.pyplot as plt
     u = np.linspace(0.0, 1.0, nu)
     x = np.array(spline.evaluate_list(u), dtype=np.float64)
@@ -24,6 +33,15 @@ def plot_spline_matplotlib(spline, nu=64):
 def generate_mesh_step(comm: MPI.Intracomm,
                        slab_spline: geomdl.abstract.Curve,
                        file_path: str | pathlib.Path):
+    """
+    Given a spline surface definition, call the appropriate mesh generation
+    routine and write data to file.
+
+    Args:
+        comm: MPI communicator
+        slab_spline: Spline defining the slab interface
+        file_path: Output mesh path
+    """
     mesh, cell_tags, facet_tags = mesh_generator2d.generate(
         comm, slab_spline, wedge_x_buffer, plate_y,
         corner_resolution, surface_resolution, bulk_resolution,
@@ -32,11 +50,20 @@ def generate_mesh_step(comm: MPI.Intracomm,
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
 
-    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_facets(
+    wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.wedge])
     wedge_facet_tags.name = "wedge_facets"
     wedge_mesh.name = "wedge"
-    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_facets(
+
+    wedgeplate_mesh, (wedgeplate_facet_tags, wedgeplate_cell_tags) = \
+        extract_submesh_and_transfer_meshtags(
+            mesh, [facet_tags, cell_tags], cell_tags.indices[
+                np.isin(cell_tags.values, (Labels.wedge, Labels.plate))])
+    wedgeplate_facet_tags.name = "wedgeplate_facets"
+    wedgeplate_cell_tags.name = "wedgeplate_cells"
+    wedgeplate_mesh.name = "wedgeplate"
+
+    slab_mesh, slab_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.slab])
     slab_facet_tags.name = "slab_facets"
     slab_mesh.name = "slab"
@@ -54,6 +81,14 @@ def generate_mesh_step(comm: MPI.Intracomm,
         fi.write_meshtags(
             wedge_facet_tags, wedge_mesh.geometry,
             geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedge_mesh.name}']/Geometry")
+
+        fi.write_mesh(wedgeplate_mesh)
+        fi.write_meshtags(
+            wedgeplate_facet_tags, wedgeplate_mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedgeplate_mesh.name}']/Geometry")
+        fi.write_meshtags(
+            wedgeplate_cell_tags, wedgeplate_mesh.geometry,
+            geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{wedgeplate_mesh.name}']/Geometry")
 
         fi.write_mesh(slab_mesh)
         fi.write_meshtags(
@@ -98,6 +133,7 @@ if __name__ == "__main__":
         return (theta * ctrl1 + (1 - theta) * ctrl0).tolist()
 
 
+    # Generate meshes in time loop
     idx_fmt = f"0{int(np.ceil(np.log10(n_slab_steps + 1)))}"
     directory = pathlib.Path("evolving2d")
     for i, t_yr in enumerate(np.linspace(0.0, t_final_yr, n_slab_steps + 1)):
@@ -106,6 +142,9 @@ if __name__ == "__main__":
         generate_mesh_step(MPI.COMM_SELF, slab_spline,
                            directory / f"subduction_zone_{i:{idx_fmt}}.xdmf")
 
+    # Write metadata: simulation time, number of slab deformation steps (i.e.
+    # time steps), the mesh files index format and the spline data. These
+    # metadata are read in by the finite element simulation script.
     meta_data = {
         "t_final_yr": t_final_yr,
         "n_slab_steps": n_slab_steps,
