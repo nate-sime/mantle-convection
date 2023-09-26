@@ -140,17 +140,16 @@ def run_mantle_convection():
     ksp.getPC().setUp()
     ksp_u.getPC().getOperators()[0].setBlockSize(V.dofmap.index_map_bs)
 
-    # Define a domain average of the pressure to be used in the pressure correction
+    # Define a domain average of the pressure to be used in the pressure
+    # correction
     vol = msh.comm.allreduce(
         fem.assemble_scalar(fem.form(
             fem.Constant(msh, PETSc.ScalarType(1.0)) * dx)), op=MPI.SUM)
-
 
     def domain_average(msh, v):
         """Compute the average of a function over the domain"""
         return 1 / vol * msh.comm.allreduce(
             fem.assemble_scalar(fem.form(v * dx)), op=MPI.SUM)
-
 
     # Solution vector split over blocks
     x = A.createVecRight()
@@ -230,7 +229,6 @@ def run_mantle_convection():
         Nu_t = r1 * (r1 - r0) / r0 * surf_flux / surf_area
         Nu_b = r0 * (r1 - r0) / r1 * core_flux / core_area
         return Nu_t, Nu_b
-
 
     # Parameters used for CFL criterion estimate
     u_spd_expr = fem.Expression(
