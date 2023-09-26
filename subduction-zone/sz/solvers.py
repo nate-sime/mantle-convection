@@ -122,7 +122,8 @@ class Stokes:
         self.mesh = mesh
         self.facet_tags = facet_tags
         self.p_order = p_order
-        self.V = dolfinx.fem.VectorFunctionSpace(mesh, ("CG", p_order))
+        self.V = dolfinx.fem.FunctionSpace(
+            mesh, ("CG", p_order, (mesh.geometry.dim,)))
         self.Q = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order - 1))
 
     def init(self, uh, Th, eta, slab_velocity, use_iterative_solver):
