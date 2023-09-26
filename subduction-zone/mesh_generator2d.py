@@ -23,8 +23,10 @@ def generate(comm: MPI.Intracomm,
              geom_degree: int = 1):
     gmsh.initialize()
     if comm.rank == 0:
-        slab_width, slab_depth = slab_spline.evaluate_single(1.0)
         slab_x0 = slab_spline.evaluate_single(0.0)
+        slab_br = slab_spline.evaluate_single(1.0)
+        slab_width = slab_br[0] - slab_x0[0]
+        slab_depth = slab_br[1] - slab_x0[1]
 
         gmsh.model.add("subduction")
 
@@ -55,14 +57,14 @@ def generate(comm: MPI.Intracomm,
 
         plate_iface = gmsh.model.occ.addLine(
             gmsh.model.occ.addPoint(slab_x0[0], plate_y, 0.0),
-            gmsh.model.occ.addPoint(slab_width + wedge_x_buffer, plate_y, 0.0))
+            gmsh.model.occ.addPoint(slab_br[0] + wedge_x_buffer, plate_y, 0.0))
         lines_to_fragment = [plate_iface]
 
         if couple_y is not None:
             assert couple_y < plate_y
             couple_line = gmsh.model.occ.addLine(
                 gmsh.model.occ.addPoint(slab_x0[0], couple_y, 0.0),
-                gmsh.model.occ.addPoint(slab_width + wedge_x_buffer, couple_y, 0.0))
+                gmsh.model.occ.addPoint(slab_br[0] + wedge_x_buffer, couple_y, 0.0))
             lines_to_fragment.append(couple_line)
 
         fragment_wedge_with_horizontal_line(lines_to_fragment)
@@ -109,7 +111,7 @@ def generate(comm: MPI.Intracomm,
                                     tag=Labels.slab_bottom)
         # wedge
         gmsh.model.addPhysicalGroup(1, wedge_facets[
-            np.isclose(coms_wedge[:, 0], slab_width + wedge_x_buffer)],
+            np.isclose(coms_wedge[:, 0], slab_br[0] + wedge_x_buffer)],
                                     tag=Labels.wedge_right)
         gmsh.model.addPhysicalGroup(1,
                                     [wedge_facets[np.argmin(coms_wedge[:, 1])]],
