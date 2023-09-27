@@ -450,7 +450,7 @@ class Heat:
         alpha = dolfinx.fem.Constant(mesh, 20.0)
         h = ufl.CellDiameter(mesh)
         n = ufl.FacetNormal(mesh)
-        ds_right = ds(Labels.wedge_right)
+        ds_right = ds((Labels.wedge_right, Labels.plate_right))
         inlet_condition = ufl.conditional(ufl.lt(ufl.dot(uh, n), 0), 1, 0)
         a_T += inlet_condition * (
                 ufl.inner(slab_data.k_prime * alpha / h * T, s)
@@ -476,8 +476,9 @@ class Heat:
                 S, mesh.topology.dim-1, inlet_facets))
 
         overriding_facets = facet_tags.indices[
-            (facet_tags.values == Labels.plate_top) |
-            (facet_tags.values == Labels.plate_right)]
+            (facet_tags.values == Labels.plate_top) #|
+            # (facet_tags.values == Labels.plate_right)
+        ]
         bc_overriding = dolfinx.fem.dirichletbc(
             overring_temp, dolfinx.fem.locate_dofs_topological(
                 S, mesh.topology.dim-1, overriding_facets))
