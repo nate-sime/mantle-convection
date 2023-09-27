@@ -20,7 +20,33 @@ def generate(comm: MPI.Intracomm,
              surface_resolution: float,
              bulk_resolution: float,
              couple_y: float = None,
-             geom_degree: int = 1):
+             geom_degree: int = 1) \
+        -> (dolfinx.mesh.Mesh, dolfinx.mesh.MeshTags, dolfinx.mesh.MeshTags):
+    """
+    Given a spline approximating a subduction zone's slab interface geometry,
+    generate a subduction zone mesh comprised of a downgoing slab, wedge and
+    overriding plate.
+
+    Notes:
+         By default the length unit may be considered to be kilometers
+
+    Args:
+        comm: MPI communicator
+        slab_spline: Spline approximating the slab interface surface
+        wedge_x_buffer: Buffer distance beyond the bottom right point of the
+         slab interface in the positive x direction
+        plate_y: The constant y coordinate of the horizontal plate
+        corner_resolution: Wedge corner point or, if provided, coupling depth
+         mesh resolution
+        surface_resolution: Slab interface mesh resolution
+        bulk_resolution: Remaining volume resolution
+        couple_y: y coordinate position of the coupling depth on the slab
+         interface
+        geom_degree: polynomial degree of the geometry approximation
+
+    Returns:
+        Mesh, cell tags and facet tags
+    """
     gmsh.initialize()
     if comm.rank == 0:
         slab_x0 = slab_spline.evaluate_single(0.0)
@@ -197,20 +223,25 @@ def generate(comm: MPI.Intracomm,
 if __name__ == "__main__":
     from mpi4py import MPI
 
+    # Geometry parameters
     depth = 600.0
     x_slab = np.linspace(0, depth, 10)
     y_slab = -x_slab
     wedge_x_buffer = 50.0
     plate_y = -50.0
     couple_y = None
+
+    # Mesh parameters
     bulk_resolution = 25.0
     corner_resolution = 2.0
     surface_resolution = 5.0
 
+    # Spline approximation of slab interface data
     import geomdl.fitting
     slab_spline = geomdl.fitting.interpolate_curve(
         np.stack((x_slab, y_slab)).T.tolist(), degree=3)
 
+    # Generate mesh
     mesh, cell_tags, facet_tags = generate(
         MPI.COMM_WORLD, slab_spline, wedge_x_buffer, plate_y,
         corner_resolution, surface_resolution, bulk_resolution,
@@ -219,6 +250,7 @@ if __name__ == "__main__":
     facet_tags.name = "zone_facets"
     mesh.name = "zone"
 
+    # Extract wedge and slab subdomains from subduction zone mesh
     wedge_mesh, wedge_facet_tags = extract_submesh_and_transfer_meshtags(
         mesh, facet_tags, cell_tags.indices[cell_tags.values == Labels.wedge])
     wedge_facet_tags.name = "wedge_facets"
@@ -228,6 +260,7 @@ if __name__ == "__main__":
     slab_facet_tags.name = "slab_facets"
     slab_mesh.name = "slab"
 
+    # Write to file
     with dolfinx.io.XDMFFile(mesh.comm, "subduction_zone.xdmf", "w") as fi:
         fi.write_mesh(mesh)
         fi.write_meshtags(
