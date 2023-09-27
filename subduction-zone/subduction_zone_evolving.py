@@ -180,10 +180,10 @@ def solve_slab_problem(
     else:
         plate_y, couple_y = None, None
     z_hat = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
-    slab_tangent_wedge = solvers.tangent_approximation(
+    slab_tangent_wedge = solvers.facet_local_projection(
         stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge, z_hat,
-        y_plate=plate_y, y_couple=couple_y)
-    slab_tangent_slab = solvers.tangent_approximation(
+        plate_depth=plate_y, couple_depth=couple_y)
+    slab_tangent_slab = solvers.facet_local_projection(
         stokes_problem_slab.V, slab_facet_tags,
         [Labels.slab_wedge, Labels.slab_plate], z_hat)
 

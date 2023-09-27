@@ -11,31 +11,31 @@ import sz.model
 Labels = sz.model.Labels
 
 
-def tangent_approximation(
-        V, mt: dolfinx.mesh.MeshTags, mt_id: int | typing.Iterable[int],
+def steepest_descent(
+        V: dolfinx.fem.FunctionSpace,
         tau: ufl.core.expr.Expr,
-        y_plate: typing.Optional[float] = None,
-        y_couple: typing.Optional[float] = None,
-        jit_options: dict = {}, form_compiler_options: dict = {}):
+        plate_depth: typing.Optional[float] = None,
+        couple_depth: typing.Optional[float] = None,
+        depth: typing.Callable[
+            [np.ndarray | ufl.core.expr.Expr],
+            np.ndarray | ufl.core.expr.Expr] = None,):
     """
-    Approximate the facet normal by projecting it into the function space for a
-    set of facets.
-
-    Notes:
-        Adapted from `dolfinx_mpc.utils.facet_normal_approximation`.
+    Formulate the vector which lies tangential to a surface and maximises
+    the scalar projection with the vector `tau`. If the optional vector `d`
+    is provided, modify the projected vector such that it points in the
+    direction such that its scalar product with `d` is positive.
 
     Args:
-        V: The function space to project into
-        mt: The `dolfinx.mesh.MeshTagsMetaClass` containing facet markers
-        mt_id: The id for the facets in `mt` we want to represent the normal at
-    """
-    comm = V.mesh.comm
-    mt_id_tuple = (mt_id,) if not hasattr(mt_id, "__len__") else tuple(mt_id)
-    n = ufl.FacetNormal(V.mesh)
-    nh = dolfinx.fem.Function(V)
-    u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-    ds = ufl.ds(domain=V.mesh, subdomain_data=mt, subdomain_id=mt_id_tuple)
+        V: The function space into which to project
+        tau: The direction of the tangent alignment to maximise
+        plate_depth: Depth of the plate
+        couple_depth: Depth of the coupling point
+        depth: Function taking position x and returning depth
 
+    Returns:
+        UFL expression
+    """
+    n = ufl.FacetNormal(V.mesh)
     if V.mesh.geometry.dim == 1:
         raise ValueError("Tangent not defined for 1D problem")
     elif V.mesh.geometry.dim == 2:
@@ -43,25 +43,52 @@ def tangent_approximation(
             return u[0]*v[1] - u[1]*v[0]
         b = -cross_2d(n, tau)
         sd = ufl.as_vector((n[1]*b, -n[0]*b))
-        sd /= ufl.sqrt(ufl.dot(sd, sd))
     else:
         sd = ufl.cross(n, -ufl.cross(n, tau))
-        sd /= ufl.sqrt(ufl.dot(sd, sd))
+    sd /= ufl.sqrt(ufl.dot(sd, sd))
 
-        # d_x = ufl.as_vector((1, 0, 0))
-        # sd_x = ufl.cross(n, -ufl.cross(n, d_x))
-        # sd_x /= ufl.sqrt(ufl.dot(sd_x, sd_x))
-
-        # sd = ufl.conditional(
-        #     ufl.gt(sd[self.model.lwd[0]], 0), sd, sd_x)
-
-    if y_plate is not None and y_couple is not None:
+    if plate_depth is not None and couple_depth is not None and depth is not None:
         x = ufl.SpatialCoordinate(V.mesh)
         sd *= ufl.max_value(
-            0.0, ufl.min_value(1.0, (x[1] - y_plate) / (y_couple - y_plate)))
+            0.0, ufl.min_value(
+                1.0,
+                (depth(x) - plate_depth) / (couple_depth - plate_depth)))
+    return sd
+
+
+def facet_local_projection(
+        V: dolfinx.fem.FunctionSpace,
+        mt: dolfinx.mesh.MeshTags, mt_id: int | typing.Iterable[int],
+        f: ufl.core.expr.Expr,
+        jit_options: typing.Optional[dict] = {},
+        form_compiler_options: typing.Optional[dict] = {}) \
+        -> dolfinx.fem.Function:
+    """
+    Approximate the facet normal by projecting it into the function space for a
+    set of facets. If a coupling depth is provided, the ve
+
+    Notes:
+        Adapted from `dolfinx_mpc.utils.facet_normal_approximation`.
+
+    Args:
+        V: The function space into which to project
+        mt: Facet markers
+        mt_id: The id for the facets in `mt` from which the topological DoFs
+         in V will be populated
+        jit_options: FFCx form JIT options
+        form_compiler_options: FFCx form compiler options
+
+    Returns
+        Facet local projection in a `dolfinx.fem.Function` defined on `V`
+    """
+    comm = V.mesh.comm
+    mt_id_tuple = (mt_id,) if not hasattr(mt_id, "__len__") else tuple(mt_id)
+    f_h = dolfinx.fem.Function(V)
+    u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
+    ds = ufl.ds(domain=V.mesh, subdomain_data=mt, subdomain_id=mt_id_tuple)
 
     a = ufl.inner(u, v) * ds
-    L = ufl.inner(sd, v) * ds
+    L = ufl.inner(f, v) * ds
 
     # Find all dofs that are not boundary dofs
     imap = V.dofmap.index_map
@@ -110,10 +137,10 @@ def tangent_approximation(
     solver.setType("cg")
     solver.rtol = 1e-8
     solver.setOperators(A)
-    solver.solve(b, nh.vector)
-    nh.vector.ghostUpdate(
+    solver.solve(b, f_h.vector)
+    f_h.vector.ghostUpdate(
         addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-    return nh
+    return f_h
 
 
 class Stokes:
