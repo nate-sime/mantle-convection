@@ -311,6 +311,9 @@ class StokesEvolving(Stokes):
         h = ufl.CellDiameter(mesh)
         ds = ufl.Measure("ds", subdomain_data=facet_tags)
         alpha = dolfinx.fem.Constant(mesh, 20.0 * V.ufl_element().degree() ** 2)
+
+        # We add the plate surface to free slip BCs assuming a high viscosity
+        # is used to model rigidity
         ds_fs = ds((Labels.free_slip, Labels.plate_top))
         a_u00 += - ufl.inner(sigma(u, uh, Th), ufl.outer(ufl.dot(v, n) * n, n)) * ds_fs\
                  - ufl.inner(ufl.outer(ufl.dot(u, n) * n, n), sigma(v, uh, Th)) * ds_fs\
@@ -331,13 +334,6 @@ class StokesEvolving(Stokes):
             [ufl.inner(f_u, v) * ufl.dx, ufl.inner(f_p, q) * ufl.dx])
 
         # -- Stokes BCs
-        noslip = np.zeros(mesh.geometry.dim, dtype=PETSc.ScalarType)
-        # noslip_facets = facet_tags.indices[
-        #     facet_tags.values == Labels.plate_wedge]
-        # bc_plate = dolfinx.fem.dirichletbc(
-        #     noslip, dolfinx.fem.locate_dofs_topological(
-        #         V, mesh.topology.dim-1, noslip_facets), V)
-
         facets = facet_tags.indices[
             np.isin(facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))]
         assert isinstance(slab_velocity, (np.ndarray, dolfinx.fem.Function))
@@ -350,9 +346,9 @@ class StokesEvolving(Stokes):
                 slab_velocity, dolfinx.fem.locate_dofs_topological(
                     V, mesh.topology.dim-1, facets))
 
-        # The plate BC goes last such that all dofs on the overriding plate
-        # have priority and therefore zero flow
-        self.bcs_u = [bc_slab]#, bc_plate]
+        # There is no plate BC, only free slip, as high vsicosity should handle
+        # the rigidity.
+        self.bcs_u = [bc_slab]
 
         # Stokes linear system and solver
         self.a_u = a_u
