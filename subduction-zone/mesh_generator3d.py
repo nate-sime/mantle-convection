@@ -314,6 +314,21 @@ def mariana_like(dip_angle: float = 45.0, a: float = 400.0,
 def straight_dip(dip_angle: float = 45.0, depth: float = 600.0,
                  n_x: float = 5, n_y: float = 5,
                  yrange: tuple[float] = (0.0, 100.0)):
+    """
+    Generate a simple straight surface dipping at the provided angle. The
+    extrusion of this surface in the y direction defines the volume.
+
+    Args:
+        dip_angle: Angle of dipping slab (degrees)
+        depth: Depth of the subduction zone
+        n_x: Number of points defining the surface in the x direction
+        n_y: Number of points defining the surface in the y direction
+        yrange: The minimum and maximum extents of the extrusion in the y
+         direction
+
+    Returns:
+        x, y and z coordinate meshgrid of the surface
+    """
     xmin = 0.0
     xmax = depth / np.tan(np.radians(dip_angle))
 
