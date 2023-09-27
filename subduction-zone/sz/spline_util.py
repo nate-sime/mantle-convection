@@ -15,7 +15,7 @@ def slab_velocity_kdtree(
     # Evaluate the splines at a net of reference coordinates
     eta = np.linspace(0, 1, resolution)
     if u_slab.function_space.mesh.geometry.dim == 3:
-        eta = np.vstack(map(np.ravel, np.meshgrid(eta, eta))).T
+        eta = np.vstack(list(map(np.ravel, np.meshgrid(eta, eta)))).T
     snet_glob = np.array(slab_spline.evaluate_list(eta.tolist()))
     snet_glob_m = np.array(slab_spline_m.evaluate_list(eta.tolist()))
 
