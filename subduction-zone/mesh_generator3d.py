@@ -12,6 +12,17 @@ from sz.mesh_utils import extract_submesh_and_transfer_meshtags
 
 
 def plot_spline_surface_pyvista(spline, nu=64, nv=64):
+    """
+    Utility function for plotting splines defined by geomdl using pyvista.
+    Useful for debugging.
+
+    Args:
+        spline: Spline to plot
+        nu: Number of points equidistantly spaced in the reference domain to
+         plot
+        nv: Number of points equidistantly spaced in the reference domain to
+         plot
+    """
     import pyvista
     u, v = np.mgrid[0:1:nu*1j, 0:1:nv*1j]
     uv = np.c_[u.ravel(), v.ravel()]
@@ -30,7 +41,30 @@ def generate(comm: MPI.Intracomm,
              surface_resolution: float,
              bulk_resolution: float,
              couple_y: float = None,
-             geom_degree: int = 1):
+             geom_degree: int = 1) \
+        -> (dolfinx.mesh.Mesh, dolfinx.mesh.MeshTags, dolfinx.mesh.MeshTags):
+    """
+    Given a spline approximating a subduction zone's slab interface geometry,
+    generate a subduction zone mesh comprised of a downgoing slab, wedge and
+    overriding plate.
+
+    Args:
+        comm: MPI communicator
+        slab_spline: Spline approximating the slab interface surface
+        plate_y: The constant y coordinate of the horizontal plate
+        slab_dz: Distance in the z direction by which to extrude the slab
+         surface interface to generate the slab volume
+        corner_resolution: Wedge corner point or, if provided, coupling depth
+         mesh resolution
+        surface_resolution: Slab interface mesh resolution
+        bulk_resolution: Remaining volume resolution
+        couple_y: y coordinate position of the coupling depth on the slab
+         interface
+        geom_degree: polynomial degree of the geometry approximation
+
+    Returns:
+        Mesh, cell tags and facet tags
+    """
     gmsh.initialize()
     if comm.rank == 0:
         slab_width = np.ptp(slab_xyz[:,0])
@@ -237,16 +271,16 @@ def generate(comm: MPI.Intracomm,
     return mesh, cell_tags, facet_tags
 
 
-def marianas_like(dip_angle: float = 45.0, a: float = 400.0,
-                  b: float = 450.0, n_t: float = 20, n_z: float = 20,
-                  z0: float = 0.0, depth: float = 300.0,
-                  b_trunc: float = 0.975):
+def mariana_like(dip_angle: float = 45.0, a: float = 400.0,
+                 b: float = 450.0, n_t: float = 5, n_z: float = 5,
+                 z0: float = 0.0, depth: float = 300.0,
+                 b_trunc: float = 0.975):
     """
-    Produce a Marianas trench style geometry. This is a straight dipping
+    Produce a Mariana trench style geometry. This is a straight dipping
     slab with a half ellipse (x,y) axis cross section.
 
     Notes:
-        The major axis needs to be truncate to avoid degenerate cells at the
+        The major axis should be truncated to avoid degenerate cells at the
         corners of the subduction zone.
 
     Args:
@@ -277,10 +311,21 @@ def marianas_like(dip_angle: float = 45.0, a: float = 400.0,
     return X, Y, slabz
 
 
+def straight_dip(dip_angle: float = 45.0, depth: float = 600.0,
+                 n_x: float = 5, n_y: float = 5,
+                 yrange: tuple[float] = (0.0, 100.0)):
+    xmin = 0.0
+    xmax = depth / np.tan(np.radians(dip_angle))
+
+    X, Y = np.mgrid[xmin:xmax:n_x*1j, yrange[0]:yrange[1]:n_y*1j]
+    Z = -X * np.tan(np.radians(dip_angle))
+    return X, Y, Z
+
+
 if __name__ == "__main__":
     from mpi4py import MPI
 
-    x_slab, y_slab, z_slab = marianas_like()
+    x_slab, y_slab, z_slab = mariana_like()
     slab_xyz = np.vstack((x_slab.ravel(), y_slab.ravel(), z_slab.ravel())).T
     slab_xyz = slab_xyz[np.lexsort((slab_xyz[:,  0], slab_xyz[:, 1]))]
 
