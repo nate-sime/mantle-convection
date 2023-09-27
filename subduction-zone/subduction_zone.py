@@ -115,6 +115,7 @@ if use_coupling_depth := False:
         wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
 else:
     plate_z, couple_z = None, None
+
 tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
 wedge_interface_tangent = solvers.steepest_descent(
         stokes_problem_wedge.V, tau, plate_depth=plate_z,
