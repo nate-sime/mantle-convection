@@ -176,7 +176,7 @@ def solve_slab_problem(
         plate_z = dolfinx.fem.Constant(
             wedge_mesh, np.array(50.0, dtype=np.float64))
         couple_z = dolfinx.fem.Constant(
-            wedge_mesh, np.array(plate_z + 100.0, dtype=np.float64))
+            wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
     else:
         plate_z, couple_z = None, None
 
