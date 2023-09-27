@@ -6,6 +6,7 @@ import dolfinx
 from mpi4py import MPI
 import gmsh
 import numpy as np
+import scipy.optimize
 
 from sz.model import Labels
 from sz.mesh_utils import extract_submesh_and_transfer_meshtags
@@ -67,10 +68,25 @@ def generate(comm: MPI.Intracomm,
     """
     gmsh.initialize()
     if comm.rank == 0:
-        slab_width = np.ptp(slab_xyz[:,0])
-        slab_length = np.ptp(slab_xyz[:,1])
-        slab_depth = np.ptp(slab_xyz[:,2])
-        slab_x0 = [slab_xyz[:,0].min(), slab_xyz[:,1].min(), slab_xyz[:,2].max()]
+        # Compute the bounding box of the spline surface
+        midpt = [0.5, 0.5]
+        bounds = [[0, 1], [0, 1]]
+        slab_xyz_bbox = []
+        for axis in range(3):
+            minmax_result = [
+                scipy.optimize.minimize(
+                    lambda x: (-1)**switch * slab_spline.evaluate_single(x)[axis],
+                    midpt, bounds=bounds) for switch in (0, 1)]
+            slab_xyz_bbox.append(
+                [slab_spline.evaluate_single(minmax_result[switch].x)[axis]
+                 for switch in (0, 1)])
+        slab_xyz_bbox = np.array(slab_xyz_bbox, dtype=np.float64).T
+
+        # Evaluate useful distances and positions
+        slab_width = np.ptp(slab_xyz_bbox[:,0])
+        slab_length = np.ptp(slab_xyz_bbox[:,1])
+        slab_depth = np.ptp(slab_xyz_bbox[:,2])
+        slab_x0 = [slab_xyz_bbox[0,0], slab_xyz_bbox[0,1].min(), slab_xyz_bbox[1,2]]
 
         gmsh.model.add("subduction")
 
@@ -191,12 +207,16 @@ def generate(comm: MPI.Intracomm,
         free_slip_faces += wedge_free_slip
 
         # plate
-        gmsh.model.addPhysicalGroup(2,
-                                    [plate_facets[np.argmax(coms_plate[:, 0])]],
-                                    tag=Labels.plate_right)
-        gmsh.model.addPhysicalGroup(2,
-                                    [plate_facets[np.argmax(coms_plate[:, 2])]],
-                                    tag=Labels.plate_top)
+        remaining_plate = list(set(plate_facets) - set(plate_wedge) - set(slab_plate))
+        coms = np.array([gmsh.model.occ.getCenterOfMass(2, s) for s in remaining_plate])
+        plate_free_slip = [remaining_plate[np.argmin(coms[:,1])],
+                           remaining_plate[np.argmax(coms[:,1])]]
+        plate_top = [plate_facets[np.argmax(coms_plate[:, 2])]]
+        plate_right = list(set(remaining_plate) - set(plate_free_slip) - set(plate_top))
+        gmsh.model.addPhysicalGroup(2, plate_right, tag=Labels.plate_right)
+        gmsh.model.addPhysicalGroup(2, plate_top, tag=Labels.plate_top)
+
+        free_slip_faces += plate_free_slip
 
         # free slip
         gmsh.model.addPhysicalGroup(2, free_slip_faces, tag=Labels.free_slip)
@@ -350,7 +370,7 @@ if __name__ == "__main__":
     slab_spline = geomdl.fitting.interpolate_surface(
         slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
         degree_u=slab_spline_degree, degree_v=slab_spline_degree)
-    plot_spline_surface_pyvista(slab_spline)
+    # plot_spline_surface_pyvista(slab_spline)
 
     plate_y = -50.0
     slab_dz = -200.0
