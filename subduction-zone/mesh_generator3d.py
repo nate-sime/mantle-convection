@@ -6,12 +6,24 @@ import dolfinx
 from mpi4py import MPI
 import gmsh
 import numpy as np
+import scipy.optimize
 
 from sz.model import Labels
 from sz.mesh_utils import extract_submesh_and_transfer_meshtags
 
 
 def plot_spline_surface_pyvista(spline, nu=64, nv=64):
+    """
+    Utility function for plotting splines defined by geomdl using pyvista.
+    Useful for debugging.
+
+    Args:
+        spline: Spline to plot
+        nu: Number of points equidistantly spaced in the reference domain to
+         plot
+        nv: Number of points equidistantly spaced in the reference domain to
+         plot
+    """
     import pyvista
     u, v = np.mgrid[0:1:nu*1j, 0:1:nv*1j]
     uv = np.c_[u.ravel(), v.ravel()]
@@ -22,21 +34,85 @@ def plot_spline_surface_pyvista(spline, nu=64, nv=64):
     pyvista.StructuredGrid(x, y, z).plot(scalars=z, show_bounds=True)
 
 
+def compute_spline_bbox(slab_spline: geomdl.abstract.Surface,
+                        xi0: typing.Sequence[float]) -> np.ndarray:
+    """
+    # Use scipy's optimisation module to compute the bounding box of a spline.
+    # This is typically more precise than `geomdl`'s bounding box computation.
+    #
+    # Notes:
+    #     Care must be taken in the choice of initial position, `xi0` which is
+    #     prone to attraction to local min/max-ima.
+    #
+    # Args:
+    #     slab_spline: Spline to compute bbox
+    #     xi0: Initial position in reference coordinates
+    #      :math:`(\\xi_0, \\xi_1) \\in (0, 1)^2`
+    #
+    # Returns:
+    #     Bounding box
+    """
+    # Compute the bounding box of the spline surface
+    bounds = [[0, 1], [0, 1]]
+    slab_xyz_bbox = []
+    for axis in range(3):
+        minmax_result = [
+            scipy.optimize.minimize(
+                lambda x: (-1) ** switch * slab_spline.evaluate_single(x)[axis],
+                xi0, bounds=bounds) for switch in (0, 1)]
+        slab_xyz_bbox.append(
+            [slab_spline.evaluate_single(minmax_result[switch].x)[axis]
+             for switch in (0, 1)])
+    slab_xyz_bbox = np.array(slab_xyz_bbox, dtype=np.float64).T
+    return slab_xyz_bbox
+
+
 def generate(comm: MPI.Intracomm,
              slab_spline: geomdl.abstract.Surface,
+             slab_spline_bbox: typing.Sequence[typing.Sequence[float]],
              plate_y: float,
              slab_dz: float,
              corner_resolution: float,
              surface_resolution: float,
              bulk_resolution: float,
              couple_y: float = None,
-             geom_degree: int = 1):
+             geom_degree: int = 1) \
+        -> (dolfinx.mesh.Mesh, dolfinx.mesh.MeshTags, dolfinx.mesh.MeshTags):
+    """
+    Given a spline approximating a subduction zone's slab interface geometry,
+    generate a subduction zone mesh comprised of a downgoing slab, wedge and
+    overriding plate.
+
+    Args:
+        comm: MPI communicator
+        slab_spline: Spline approximating the slab interface surface
+        slab_spline_bbox: The bounding box of the spline surface in the
+         form `[[xmin, ymin, zmin], [xmax, ymax, zmax]]`
+        plate_y: The constant y coordinate of the horizontal plate
+        slab_dz: Distance in the z direction by which to extrude the slab
+         surface interface to generate the slab volume
+        corner_resolution: Wedge corner point or, if provided, coupling depth
+         mesh resolution
+        surface_resolution: Slab interface mesh resolution
+        bulk_resolution: Remaining volume resolution
+        couple_y: y coordinate position of the coupling depth on the slab
+         interface
+        geom_degree: polynomial degree of the geometry approximation
+
+    Returns:
+        Mesh, cell tags and facet tags
+    """
     gmsh.initialize()
     if comm.rank == 0:
-        slab_width = np.ptp(slab_xyz[:,0])
-        slab_length = np.ptp(slab_xyz[:,1])
-        slab_depth = np.ptp(slab_xyz[:,2])
-        slab_x0 = [slab_xyz[:,0].min(), slab_xyz[:,1].min(), slab_xyz[:,2].max()]
+        # Evaluate useful distances and positions
+        if not isinstance(slab_spline_bbox, np.ndarray):
+            slab_spline_bbox = np.array(slab_spline_bbox, dtype=np.float64)
+        slab_width = np.ptp(slab_spline_bbox[:,0])
+        slab_length = np.ptp(slab_spline_bbox[:,1])
+        slab_depth = np.ptp(slab_spline_bbox[:,2])
+        slab_x0 = [slab_spline_bbox[0,0],
+                   slab_spline_bbox[0,1].min(),
+                   slab_spline_bbox[1,2]]
 
         gmsh.model.add("subduction")
 
@@ -157,12 +233,16 @@ def generate(comm: MPI.Intracomm,
         free_slip_faces += wedge_free_slip
 
         # plate
-        gmsh.model.addPhysicalGroup(2,
-                                    [plate_facets[np.argmax(coms_plate[:, 0])]],
-                                    tag=Labels.plate_right)
-        gmsh.model.addPhysicalGroup(2,
-                                    [plate_facets[np.argmax(coms_plate[:, 2])]],
-                                    tag=Labels.plate_top)
+        remaining_plate = list(set(plate_facets) - set(plate_wedge) - set(slab_plate))
+        coms = np.array([gmsh.model.occ.getCenterOfMass(2, s) for s in remaining_plate])
+        plate_free_slip = [remaining_plate[np.argmin(coms[:,1])],
+                           remaining_plate[np.argmax(coms[:,1])]]
+        plate_top = [plate_facets[np.argmax(coms_plate[:, 2])]]
+        plate_right = list(set(remaining_plate) - set(plate_free_slip) - set(plate_top))
+        gmsh.model.addPhysicalGroup(2, plate_right, tag=Labels.plate_right)
+        gmsh.model.addPhysicalGroup(2, plate_top, tag=Labels.plate_top)
+
+        free_slip_faces += plate_free_slip
 
         # free slip
         gmsh.model.addPhysicalGroup(2, free_slip_faces, tag=Labels.free_slip)
@@ -237,16 +317,16 @@ def generate(comm: MPI.Intracomm,
     return mesh, cell_tags, facet_tags
 
 
-def marianas_like(dip_angle: float = 45.0, a: float = 400.0,
-                  b: float = 450.0, n_t: float = 20, n_z: float = 20,
-                  z0: float = 0.0, depth: float = 300.0,
-                  b_trunc: float = 0.975):
+def mariana_like(dip_angle: float = 45.0, a: float = 400.0,
+                 b: float = 450.0, n_t: float = 5, n_z: float = 5,
+                 z0: float = 0.0, depth: float = 300.0,
+                 b_trunc: float = 0.975):
     """
-    Produce a Marianas trench style geometry. This is a straight dipping
+    Produce a Mariana trench style geometry. This is a straight dipping
     slab with a half ellipse (x,y) axis cross section.
 
     Notes:
-        The major axis needs to be truncate to avoid degenerate cells at the
+        The major axis should be truncated to avoid degenerate cells at the
         corners of the subduction zone.
 
     Args:
@@ -277,10 +357,36 @@ def marianas_like(dip_angle: float = 45.0, a: float = 400.0,
     return X, Y, slabz
 
 
+def straight_dip(dip_angle: float = 45.0, depth: float = 600.0,
+                 n_x: float = 5, n_y: float = 5,
+                 yrange: tuple[float] = (0.0, 100.0)):
+    """
+    Generate a simple straight surface dipping at the provided angle. The
+    extrusion of this surface in the y direction defines the volume.
+
+    Args:
+        dip_angle: Angle of dipping slab (degrees)
+        depth: Depth of the subduction zone
+        n_x: Number of points defining the surface in the x direction
+        n_y: Number of points defining the surface in the y direction
+        yrange: The minimum and maximum extents of the extrusion in the y
+         direction
+
+    Returns:
+        x, y and z coordinate meshgrid of the surface
+    """
+    xmin = 0.0
+    xmax = depth / np.tan(np.radians(dip_angle))
+
+    X, Y = np.mgrid[xmin:xmax:n_x*1j, yrange[0]:yrange[1]:n_y*1j]
+    Z = -X * np.tan(np.radians(dip_angle))
+    return X, Y, Z
+
+
 if __name__ == "__main__":
     from mpi4py import MPI
 
-    x_slab, y_slab, z_slab = marianas_like()
+    x_slab, y_slab, z_slab = mariana_like()
     slab_xyz = np.vstack((x_slab.ravel(), y_slab.ravel(), z_slab.ravel())).T
     slab_xyz = slab_xyz[np.lexsort((slab_xyz[:,  0], slab_xyz[:, 1]))]
 
@@ -290,7 +396,8 @@ if __name__ == "__main__":
     slab_spline = geomdl.fitting.interpolate_surface(
         slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
         degree_u=slab_spline_degree, degree_v=slab_spline_degree)
-    plot_spline_surface_pyvista(slab_spline)
+    slab_spline_bbox = compute_spline_bbox(slab_spline, [0.55, 0.55])
+    # plot_spline_surface_pyvista(slab_spline)
 
     plate_y = -50.0
     slab_dz = -200.0
@@ -300,7 +407,7 @@ if __name__ == "__main__":
     surface_resolution = 20.0
 
     mesh, cell_tags, facet_tags = generate(
-        MPI.COMM_WORLD, slab_spline, plate_y, slab_dz,
+        MPI.COMM_WORLD, slab_spline, slab_spline_bbox, plate_y, slab_dz,
         corner_resolution, surface_resolution, bulk_resolution,
         couple_y=couple_y, geom_degree=1)
     cell_tags.name = "zone_cells"

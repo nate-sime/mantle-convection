@@ -23,6 +23,7 @@ class Labels(enum.IntEnum):
     free_slip = 14
 
     def __str__(self):
+        # Ensure that FFCx evaluates this as str(int()) when generating code
         return str(int(self))
 
 

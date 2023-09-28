@@ -173,19 +173,26 @@ def solve_slab_problem(
     if use_coupling_depth := True:
         # Ideally a coupling depth is employed such that spurious flow is not
         # initiated in the plate.
-        plate_y = dolfinx.fem.Constant(
-            wedge_mesh, np.array(-50.0, dtype=np.float64))
-        couple_y = dolfinx.fem.Constant(
-            wedge_mesh, np.array(plate_y - 10.0, dtype=np.float64))
+        plate_z = dolfinx.fem.Constant(
+            wedge_mesh, np.array(50.0, dtype=np.float64))
+        couple_z = dolfinx.fem.Constant(
+            wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
     else:
-        plate_y, couple_y = None, None
-    z_hat = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
-    slab_tangent_wedge = solvers.tangent_approximation(
-        stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge, z_hat,
-        y_plate=plate_y, y_couple=couple_y)
-    slab_tangent_slab = solvers.tangent_approximation(
+        plate_z, couple_z = None, None
+
+    tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
+    wedge_interface_tangent = solvers.steepest_descent(
+        stokes_problem_wedge.V, tau, plate_depth=plate_z,
+        couple_depth=couple_z, depth=depth)
+    slab_tangent_wedge = solvers.facet_local_projection(
+        stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
+        wedge_interface_tangent)
+
+    slab_interface_tangent = solvers.steepest_descent(
+        stokes_problem_slab.V, tau)
+    slab_tangent_slab = solvers.facet_local_projection(
         stokes_problem_slab.V, slab_facet_tags,
-        [Labels.slab_wedge, Labels.slab_plate], z_hat)
+        [Labels.slab_wedge, Labels.slab_plate], slab_interface_tangent)
 
     if slab_spline_m:
         import sz.spline_util
@@ -343,8 +350,8 @@ def xdmf_interpolator(u):
 
 
 if __name__ == "__main__":
-    output_directory = pathlib.Path("evolving2d_results")
-    input_directory = pathlib.Path("evolving2d")
+    output_directory = pathlib.Path("evolving3d_results")
+    input_directory = pathlib.Path("evolving3d")
     with open(input_directory / "metadata.json", "r") as fi:
         meta_data = json.load(fi)
     t_final_yr = meta_data["t_final_yr"]
