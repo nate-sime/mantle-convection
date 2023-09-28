@@ -7,12 +7,20 @@ import ufl
 
 
 class Labels(enum.IntEnum):
+    """
+    Mesh labels assumed provided by the mesh generator.
+    """
+    # Volumes
     plate = 1
     slab = 2
     wedge = 3
+
+    # Interfaces
     plate_wedge = 4
     slab_plate = 5
     slab_wedge = 6
+
+    # Enclosing faces
     slab_left = 7
     slab_bottom = 8
     slab_right = 9
@@ -20,12 +28,13 @@ class Labels(enum.IntEnum):
     wedge_bottom = 11
     plate_top = 12
     plate_right = 13
+
+    # Special faces
     free_slip = 14
 
     def __str__(self):
         # Ensure that FFCx evaluates this as str(int()) when generating code
         return str(int(self))
-
 
 
 @dataclasses.dataclass
