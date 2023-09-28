@@ -110,7 +110,7 @@ Th_slab.x.scatter_forward()
 # solving the projection inside solvers.tangent_approximation
 if use_coupling_depth := False:
     plate_z = dolfinx.fem.Constant(
-        wedge_mesh, np.array(50.0, dtype=np.float64))
+        wedge_mesh, np.array(slab_data.plate_thickness, dtype=np.float64))
     couple_z = dolfinx.fem.Constant(
         wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
 else:

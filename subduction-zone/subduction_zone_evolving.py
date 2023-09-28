@@ -174,7 +174,7 @@ def solve_slab_problem(
         # Ideally a coupling depth is employed such that spurious flow is not
         # initiated in the plate.
         plate_z = dolfinx.fem.Constant(
-            wedge_mesh, np.array(50.0, dtype=np.float64))
+            wedge_mesh, np.array(slab_data.plate_thickness, dtype=np.float64))
         couple_z = dolfinx.fem.Constant(
             wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
     else:
@@ -350,8 +350,8 @@ def xdmf_interpolator(u):
 
 
 if __name__ == "__main__":
-    output_directory = pathlib.Path("evolving3d_results")
-    input_directory = pathlib.Path("evolving3d")
+    output_directory = pathlib.Path("evolving2d_results")
+    input_directory = pathlib.Path("evolving2d")
     with open(input_directory / "metadata.json", "r") as fi:
         meta_data = json.load(fi)
     t_final_yr = meta_data["t_final_yr"]
