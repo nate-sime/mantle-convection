@@ -443,7 +443,7 @@ class Heat:
         overring_temp.x.scatter_forward()
 
         ds = ufl.Measure("ds", subdomain_data=facet_tags)
-        alpha = dolfinx.fem.Constant(mesh, 20.0)
+        alpha = dolfinx.fem.Constant(mesh, 20.0 * max(self.p_order, 1)**2)
         h = ufl.CellDiameter(mesh)
         n = ufl.FacetNormal(mesh)
         ds_right = ds((Labels.wedge_right, Labels.plate_right))
