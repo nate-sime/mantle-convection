@@ -34,8 +34,42 @@ def plot_spline_surface_pyvista(spline, nu=64, nv=64):
     pyvista.StructuredGrid(x, y, z).plot(scalars=z, show_bounds=True)
 
 
+def compute_spline_bbox(slab_spline: geomdl.abstract.Surface,
+                        xi0: typing.Sequence[float]) -> np.ndarray:
+    """
+    # Use scipy's optimisation module to compute the bounding box of a spline.
+    # This is typically more precise than `geomdl`'s bounding box computation.
+    #
+    # Notes:
+    #     Care must be taken in the choice of initial position, `xi0` which is
+    #     prone to attraction to local min/max-ima.
+    #
+    # Args:
+    #     slab_spline: Spline to compute bbox
+    #     xi0: Initial position in reference coordinates
+    #      :math:`(\\xi_0, \\xi_1) \\in (0, 1)^2`
+    #
+    # Returns:
+    #     Bounding box
+    """
+    # Compute the bounding box of the spline surface
+    bounds = [[0, 1], [0, 1]]
+    slab_xyz_bbox = []
+    for axis in range(3):
+        minmax_result = [
+            scipy.optimize.minimize(
+                lambda x: (-1) ** switch * slab_spline.evaluate_single(x)[axis],
+                xi0, bounds=bounds) for switch in (0, 1)]
+        slab_xyz_bbox.append(
+            [slab_spline.evaluate_single(minmax_result[switch].x)[axis]
+             for switch in (0, 1)])
+    slab_xyz_bbox = np.array(slab_xyz_bbox, dtype=np.float64).T
+    return slab_xyz_bbox
+
+
 def generate(comm: MPI.Intracomm,
              slab_spline: geomdl.abstract.Surface,
+             slab_spline_bbox: typing.Sequence[typing.Sequence[float]],
              plate_y: float,
              slab_dz: float,
              corner_resolution: float,
@@ -52,6 +86,8 @@ def generate(comm: MPI.Intracomm,
     Args:
         comm: MPI communicator
         slab_spline: Spline approximating the slab interface surface
+        slab_spline_bbox: The bounding box of the spline surface in the
+         form `[[xmin, ymin, zmin], [xmax, ymax, zmax]]`
         plate_y: The constant y coordinate of the horizontal plate
         slab_dz: Distance in the z direction by which to extrude the slab
          surface interface to generate the slab volume
@@ -68,25 +104,15 @@ def generate(comm: MPI.Intracomm,
     """
     gmsh.initialize()
     if comm.rank == 0:
-        # Compute the bounding box of the spline surface
-        midpt = [0.5, 0.5]
-        bounds = [[0, 1], [0, 1]]
-        slab_xyz_bbox = []
-        for axis in range(3):
-            minmax_result = [
-                scipy.optimize.minimize(
-                    lambda x: (-1)**switch * slab_spline.evaluate_single(x)[axis],
-                    midpt, bounds=bounds) for switch in (0, 1)]
-            slab_xyz_bbox.append(
-                [slab_spline.evaluate_single(minmax_result[switch].x)[axis]
-                 for switch in (0, 1)])
-        slab_xyz_bbox = np.array(slab_xyz_bbox, dtype=np.float64).T
-
         # Evaluate useful distances and positions
-        slab_width = np.ptp(slab_xyz_bbox[:,0])
-        slab_length = np.ptp(slab_xyz_bbox[:,1])
-        slab_depth = np.ptp(slab_xyz_bbox[:,2])
-        slab_x0 = [slab_xyz_bbox[0,0], slab_xyz_bbox[0,1].min(), slab_xyz_bbox[1,2]]
+        if not isinstance(slab_spline_bbox, np.ndarray):
+            slab_spline_bbox = np.array(slab_spline_bbox, dtype=np.float64)
+        slab_width = np.ptp(slab_spline_bbox[:,0])
+        slab_length = np.ptp(slab_spline_bbox[:,1])
+        slab_depth = np.ptp(slab_spline_bbox[:,2])
+        slab_x0 = [slab_spline_bbox[0,0],
+                   slab_spline_bbox[0,1].min(),
+                   slab_spline_bbox[1,2]]
 
         gmsh.model.add("subduction")
 
@@ -370,6 +396,7 @@ if __name__ == "__main__":
     slab_spline = geomdl.fitting.interpolate_surface(
         slab_xyz.tolist(), slab_xy_shape[0], slab_xy_shape[1],
         degree_u=slab_spline_degree, degree_v=slab_spline_degree)
+    slab_spline_bbox = compute_spline_bbox(slab_spline, [0.55, 0.55])
     # plot_spline_surface_pyvista(slab_spline)
 
     plate_y = -50.0
@@ -380,7 +407,7 @@ if __name__ == "__main__":
     surface_resolution = 20.0
 
     mesh, cell_tags, facet_tags = generate(
-        MPI.COMM_WORLD, slab_spline, plate_y, slab_dz,
+        MPI.COMM_WORLD, slab_spline, slab_spline_bbox, plate_y, slab_dz,
         corner_resolution, surface_resolution, bulk_resolution,
         couple_y=couple_y, geom_degree=1)
     cell_tags.name = "zone_cells"

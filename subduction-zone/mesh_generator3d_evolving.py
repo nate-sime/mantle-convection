@@ -1,4 +1,5 @@
 import pathlib
+import typing
 
 import numpy as np
 import dolfinx
@@ -15,6 +16,8 @@ import mesh_generator3d
 
 def generate_mesh_step(comm: MPI.Intracomm,
                        slab_spline: geomdl.abstract.Surface,
+                       slab_spline_bbox: typing.Sequence[
+                           typing.Sequence[float]],
                        slab_dz: float,
                        file_path: str | pathlib.Path):
     """
@@ -24,12 +27,14 @@ def generate_mesh_step(comm: MPI.Intracomm,
     Args:
         comm: MPI communicator
         slab_spline: Spline defining the slab interface
+        slab_spline_bbox: The bounding box of the spline surface in the
+         form `[[xmin, ymin, zmin], [xmax, ymax, zmax]]`
         slab_dz: Distance in the z direction by which to extrude the slab
          surface interface to generate the slab volume
         file_path: Output mesh path
     """
     mesh, cell_tags, facet_tags = mesh_generator3d.generate(
-        comm, slab_spline, plate_y, slab_dz,
+        comm, slab_spline, slab_spline_bbox, plate_y, slab_dz,
         corner_resolution, surface_resolution, bulk_resolution,
         couple_y=couple_y)
     cell_tags.name = "zone_cells"
@@ -86,7 +91,8 @@ if __name__ == "__main__":
     slab_spline_degree = 3
 
     # Initial surface geometry
-    x_slab, y_slab, z_slab = mesh_generator3d.straight_dip()
+    x_slab, y_slab, z_slab = mesh_generator3d.straight_dip(
+        depth=300.0, yrange=[-438.8, 438.8])
     slab_xyz = np.vstack((x_slab.ravel(), y_slab.ravel(), z_slab.ravel())).T
     slab_xyz = slab_xyz[np.lexsort((slab_xyz[:,  0], slab_xyz[:, 1]))]
 
@@ -98,8 +104,9 @@ if __name__ == "__main__":
         degree_u=slab_spline_degree, degree_v=slab_spline_degree)
 
     # Final surface geometry
+    x_slab, y_slab, z_slab = mesh_generator3d.mariana_like()
     slab_xyz = np.vstack(
-        (x_slab.ravel() + 10.0, y_slab.ravel(), z_slab.ravel())).T
+        (x_slab.ravel(), y_slab.ravel(), z_slab.ravel())).T
     slab_xyz = slab_xyz[np.lexsort((slab_xyz[:, 0], slab_xyz[:, 1]))]
     slab_xy_shape = [x_slab.shape[0], y_slab.shape[1]]
     slab_spline_degree = 3
@@ -108,7 +115,7 @@ if __name__ == "__main__":
         degree_u=slab_spline_degree, degree_v=slab_spline_degree)
 
     t_final_yr = 11e6
-    n_slab_steps = 9
+    n_slab_steps = 10
 
     plate_y = -50.0
     slab_dz = -200.0
@@ -137,8 +144,11 @@ if __name__ == "__main__":
     for i, t_yr in enumerate(np.linspace(0.0, t_final_yr, n_slab_steps + 1)):
         print(f"Generating mesh {i}: t = {t_yr:.3e} yr")
         slab_spline.ctrlpts = ctrl_pt_transfer_fn(theta=t_yr / t_final_yr)
-        generate_mesh_step(MPI.COMM_SELF, slab_spline, slab_dz,
-                           directory / f"subduction_zone_{i:{idx_fmt}}.xdmf")
+        slab_spline_bbox = mesh_generator3d.compute_spline_bbox(
+            slab_spline, [0.55, 0.55])
+        generate_mesh_step(
+            MPI.COMM_SELF, slab_spline, slab_spline_bbox, slab_dz,
+            directory / f"subduction_zone_{i:{idx_fmt}}.xdmf")
 
     # Write metadata: simulation time, number of slab deformation steps (i.e.
     # time steps), the mesh files index format and the spline data. These
