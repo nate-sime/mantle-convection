@@ -1,10 +1,12 @@
 # Subduction zone modelling with DOLFINx
 
 Provided is a DOLFINx implementation of the subduction zone model presented
-in van Keken et al. (2010) *A community benchmark for subduction zone modeling*
-(https://doi.org/10.1016/j.pepi.2008.04.015). This implementation may be
+in [van Keken et al., *A community benchmark for subduction zone modeling*
+Physics of the Earth and Planetary Interiors (2010)](
+https://doi.org/10.1016/j.pepi.2008.04.015). This implementation may be
 used to reproduce the cases exhibited, or enable new subduction models with
 more sophisticated geometries, material models, boundary conditions and
+geometries. This includes evolving subduction zones with prescribed interface
 geometries. For example:
 
 | Model                             | Temperature field                       |
@@ -21,9 +23,6 @@ geometries. For example:
 These examples are not intended to be instructive for geophysics modelling or
 DOLFINx use. Refer to, for example, van Keken et al (2010) and
 [the DOLFINx tutorial](https://jsdokken.com/dolfinx-tutorial/), respectively.
-
-This code is provided in support of the work Sime et al. *Thermal modeling of
-subduction zones with prescribed and evolving 2D and 3D slab geometries*.
 
 
 # Dependencies
@@ -89,3 +88,15 @@ It is recommended to use an iterative solver to solve the 3D linear Stokes
 system. A simple implementation is provided; however, it is encouraged that
 the user implement their problem specific solver depending on the complexity
 of their model.
+
+# References
+
+This code is provided in support of the work N. Sime, C. R. Wilson & P. E. van
+Keken, *Thermal modeling of subduction zones with prescribed and evolving 2D
+and 3D slab geometries* (2023)
+([arXiv](https://doi.org/10.48550/arXiv.2309.12895)).
+
+
+# Acknowledgments
+
+This work was supported by National Science Foundation grant 2021027.
