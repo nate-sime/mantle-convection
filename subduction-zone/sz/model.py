@@ -41,6 +41,9 @@ class Labels(enum.IntEnum):
 
 # @dataclasses.dataclass
 class SZData:
+    """
+    Utility class holding subduction zone data.
+    """
     # --- Physical data
     plate_thickness: float = 50.0  # km
     Ts: float = 273.0              # Surface temperature, K
@@ -60,12 +63,44 @@ class SZData:
         return overriding_side_temp
 
     def Q_wedge(self, d: np.ndarray):
+        """
+        Depth dependent rate of heat production in the wedge.
+
+        Args:
+            d: Depth
+
+        Returns:
+            Rate of heat production `W / m^3`
+        """
         return np.zeros_like(d)
 
     def k_wedge(self, d: np.ndarray):
+        """
+        Depth dependent thermal conductivity in the wedge.
+
+        Args:
+            d: Depth
+
+        Returns:
+            Thermal conductivity `W / (m K)`
+        """
         return np.full_like(d, 3.0)
 
     def rho_wedge(self, d: np.ndarray):
+        """
+        Depth dependent density in the wedge.
+
+        Notes:
+            The heat equation requires a piecewise constant density to provide
+            a valid model. For spatially varying density consider conservation
+            of enthalpy.
+
+        Args:
+            d: Depth
+
+        Returns:
+            Density `kg / m^3`
+        """
         return np.full_like(d, 3300.0)
 
     def k_prime(self, k):
