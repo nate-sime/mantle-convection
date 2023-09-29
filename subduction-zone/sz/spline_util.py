@@ -5,11 +5,32 @@ import geomdl.abstract
 import dolfinx
 
 
-def slab_velocity_kdtree(
+def deforming_slab_velocity_kdtree(
         slab_spline: geomdl.abstract.Curve | geomdl.abstract.Surface,
         slab_spline_m: geomdl.abstract.Curve | geomdl.abstract.Surface,
         u_slab: dolfinx.fem.Function, slab_facet_indices: list[int],
-        dt_val: float, resolution: int=256):
+        dt_val: float, resolution: int = 256) -> None:
+    """
+    Modify the velocity function intended for use as a boundary condition on
+    the subducting slab interface to incorporate the velocity of deformation
+    of that interface.
+
+    Notes:
+        The deformation velocity is found by using a kdtree (provided by SciPy)
+        to find the reference space coordinate on the deforming spline.
+
+    Args:
+        slab_spline: The subduction interface spline at current time step
+        slab_spline_m: The subduction interface spline at previous time step
+        u_slab: The velocity function of the subduction zone slab interface to
+         be used as a boundary condition
+        slab_facet_indices: The facet indices associtated with the interface.
+         The DoFs topologically associated with these facets will be those
+          modified in `u_slab`.
+        dt_val: The scaled time step
+        resolution: The resolution used in the `kdtree` in each orthogonal
+         spline reference axis
+    """
     mesh = u_slab.function_space.mesh
 
     # Evaluate the splines at a net of reference coordinates

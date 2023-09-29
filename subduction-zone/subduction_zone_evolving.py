@@ -15,7 +15,7 @@ def print0(*args):
     PETSc.Sys.Print(" ".join(map(str, args)))
 
 
-slab_data = model.SlabData()
+sz_data = model.SZData()
 Labels = model.Labels
 
 
@@ -99,7 +99,7 @@ def solve_slab_problem(
         wedge_mesh, wedge_facet_tags, p_order)
     stokes_problem_slab = solvers.StokesEvolving(
         slab_mesh, slab_facet_tags, p_order)
-    heat_problem = solvers.Heat(mesh, facet_tags, p_order)
+    heat_problem = solvers.Heat(mesh, cell_tags, facet_tags, p_order)
 
     match tdim:
         case 2:
@@ -123,7 +123,7 @@ def solve_slab_problem(
     uh_wedge = dolfinx.fem.Function(stokes_problem_wedge.V)
     uh_slab = dolfinx.fem.Function(stokes_problem_slab.V)
     Th = dolfinx.fem.Function(heat_problem.S)
-    Th.interpolate(lambda x: np.full_like(x[0], slab_data.Ts))
+    Th.interpolate(lambda x: np.full_like(x[0], sz_data.Ts))
     Th.name = "T"
     uh_wedge.name = "u"
 
@@ -173,34 +173,37 @@ def solve_slab_problem(
     if use_coupling_depth := True:
         # Ideally a coupling depth is employed such that spurious flow is not
         # initiated in the plate.
-        plate_z = dolfinx.fem.Constant(
-            wedge_mesh, np.array(50.0, dtype=np.float64))
-        couple_z = dolfinx.fem.Constant(
-            wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
+        couple_depth = dolfinx.fem.Constant(
+            wedge_mesh, np.array(sz_data.plate_thickness, dtype=np.float64))
+        full_couple_depth = dolfinx.fem.Constant(
+            wedge_mesh, np.array(couple_depth + 10.0, dtype=np.float64))
     else:
-        plate_z, couple_z = None, None
+        couple_depth, full_couple_depth = None, None
 
     tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
+    wedge_u_conv = dolfinx.fem.Constant(wedge_mesh, sz_data.u_conv)
     wedge_interface_tangent = solvers.steepest_descent(
-        stokes_problem_wedge.V, tau, plate_depth=plate_z,
-        couple_depth=couple_z, depth=depth)
+        stokes_problem_wedge.V, tau, couple_depth=couple_depth,
+        full_couple_depth=full_couple_depth, depth=depth)
     slab_tangent_wedge = solvers.facet_local_projection(
         stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
-        wedge_interface_tangent)
+        wedge_u_conv * wedge_interface_tangent)
 
+    slab_u_conv = dolfinx.fem.Constant(slab_mesh, sz_data.u_conv)
     slab_interface_tangent = solvers.steepest_descent(
         stokes_problem_slab.V, tau)
     slab_tangent_slab = solvers.facet_local_projection(
         stokes_problem_slab.V, slab_facet_tags,
-        [Labels.slab_wedge, Labels.slab_plate], slab_interface_tangent)
+        [Labels.slab_wedge, Labels.slab_plate],
+        slab_u_conv * slab_interface_tangent)
 
     if slab_spline_m:
         import sz.spline_util
-        sz.spline_util.slab_velocity_kdtree(
+        sz.spline_util.deforming_slab_velocity_kdtree(
             slab_spline, slab_spline_m, slab_tangent_slab,
             slab_facet_tags.indices[np.isin(slab_facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))],
             dt, resolution=256)
-        sz.spline_util.slab_velocity_kdtree(
+        sz.spline_util.deforming_slab_velocity_kdtree(
             slab_spline, slab_spline_m, slab_tangent_wedge,
             wedge_facet_tags.indices[np.isin(wedge_facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))],
             dt, resolution=256)
@@ -235,12 +238,19 @@ def solve_slab_problem(
         else:
             interpolation_utils.nonmatching_interpolate(Th0_mesh0, Th0)
         Th0.x.scatter_forward()
-    heat_problem.init(uh_full, slab_data, depth, use_iterative_solver=False,
-                      Th0=Th0, dt=dt)
+
+    slab_inlet_temp = lambda x: model.slab_inlet_temp(
+        x, sz_data, depth, sz_data.age_slab)
+    overriding_side_temp = lambda x: sz_data.overriding_side_temp(
+        x, sz_data, depth)
+    heat_problem.init(
+        uh_full, sz_data, depth, slab_inlet_temp, overriding_side_temp,
+        use_iterative_solver=False, Th0=Th0, dt=dt)
 
     # Useful initial guess for strainrate dependent viscosities
     if tdim == 2:
-        gkb_wedge_flow_ = lambda x: model.gkb_wedge_flow(x, slab_data.plate_thickness)
+        gkb_wedge_flow_ = lambda x: model.gkb_wedge_flow(
+            x, sz_data.plate_thickness)
         uh_full.interpolate(gkb_wedge_flow_, cells=wedge_cells)
         uh_full.x.scatter_forward()
         uh_wedge.interpolate(gkb_wedge_flow_)
@@ -350,8 +360,8 @@ def xdmf_interpolator(u):
 
 
 if __name__ == "__main__":
-    output_directory = pathlib.Path("evolving3d_results")
-    input_directory = pathlib.Path("evolving3d")
+    output_directory = pathlib.Path("evolving2d_results")
+    input_directory = pathlib.Path("evolving2d")
     with open(input_directory / "metadata.json", "r") as fi:
         meta_data = json.load(fi)
     t_final_yr = meta_data["t_final_yr"]
@@ -373,7 +383,7 @@ if __name__ == "__main__":
         return (theta * ctrl1 + (1 - theta) * ctrl0).tolist()
 
     t_yr_steps = np.linspace(0.0, t_final_yr, n_slab_steps + 1)
-    dt = slab_data.t_yr_to_ndim(t_yr_steps[1] - t_yr_steps[0])
+    dt = sz_data.t_yr_to_ndim(t_yr_steps[1] - t_yr_steps[0])
 
     for i, t_yr in enumerate(t_yr_steps):
         if i == 0:

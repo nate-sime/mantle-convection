@@ -224,12 +224,25 @@ if __name__ == "__main__":
     from mpi4py import MPI
 
     # Geometry parameters
-    depth = 600.0
-    x_slab = np.linspace(0, depth, 10)
-    y_slab = -x_slab
-    wedge_x_buffer = 50.0
-    plate_y = -50.0
-    couple_y = None
+    benchmark = "vanKeken2010"
+    if benchmark == "vanKeken2010":
+        dip_angle = 45
+        depth = 600.0
+        length = depth / np.tan(np.radians(dip_angle))
+        x_slab = np.linspace(0, length, 10)
+        y_slab = -x_slab * np.tan(np.radians(dip_angle))
+        wedge_x_buffer = 50.0
+        plate_y = -50.0
+        couple_y = None
+    elif benchmark == "Wilson2023":
+        dip_angle = np.degrees(np.arctan(0.5))
+        depth = 200.0
+        length = depth / np.tan(np.radians(dip_angle))
+        x_slab = np.linspace(0, length, 10)
+        y_slab = -x_slab * np.tan(np.radians(dip_angle))
+        wedge_x_buffer = 0.0
+        plate_y = -40.0
+        couple_y = -80.0
 
     # Mesh parameters
     bulk_resolution = 25.0
