@@ -54,21 +54,13 @@ class SlabData:
     u_conv_cm_yr: float = 10.0     # Slab convergence velocity, cm / yr
     h_r: float = 1000.0            # Length scale, m
 
-    # depth, Q, k, rho
-    params_wedge: tuple = ((15e3, 1.3e-6, 2.5, 2750.0),
-                           (40e3, 0.27e-6, 2.5, 2750.0),
-                           (None, 0.0, 3.1, 3300.0))
-
-    def Q_wedge(self, x, depth):
-        d = depth(x)
+    def Q_wedge(self, d: np.ndarray):
         return np.piecewise(d, [d <= 40.0, d <= 15.0], [0.27e-6, 1.3e-6, 0.0])
 
-    def k_wedge(self, x, depth):
-        d = depth(x)
+    def k_wedge(self, d: np.ndarray):
         return np.piecewise(d, [d <= 40.0, d <= 15.0], [2.5, 2.5, 3.1])
 
-    def rho_wedge(self, x, depth):
-        d = depth(x)
+    def rho_wedge(self, d: np.ndarray):
         return np.piecewise(d, [d <= 40.0, d <= 15.0], [2750.0, 2750.0, 3300.0])
 
     def k_prime(self, k):
@@ -243,39 +235,58 @@ def overriding_side_temp(
     return vals
 
 
-def overriding_side_temp_heated(
-        x: np.ndarray, slab_data: SlabData, depth: callable) -> np.ndarray:
+def overriding_side_temp_heated_odeint(
+        x: np.ndarray, slab_data: SlabData, depth_f: callable,
+        rtol: float = 1e2 * np.finfo(np.float64).eps,
+        atol: float = 1e2 * np.finfo(np.float64).eps) -> np.ndarray:
+    """
+    Using SciPy's `odeint`, compute the approximate solution of
 
-    def T_soln(x, x0, T0, q, Q, k):
-        Ta = T0 + q / k * (x - x0) - Q * (x - x0) ** 2 / (2 * k)
-        qa = q - Q * (x - x0)
-        return Ta, qa
+    .. math::
 
-    x0 = -1e-10
-    q0 = slab_data.q_surf
-    T0 = slab_data.Ts
-    depth = depth(x) * slab_data.h_r
-    if np.any(depth < -1.0):
-        print(f"WARNING: (min, max) depth: {depth.min(), depth.max()}")
+        - \frac{\mathrm{d}}{\mathrm{d} z}\left( k \frac{\mathrm{d}T}{\mathrm{d}z} \right) = Q
+
+    where :math:`z` is depth, :math:`T(z=0) = T_s` and
+    :math:`k \mathrm{d} T / \mathrm{d} z|_{z=0} = q`.
+
+    Args:
+        x: Position
+        slab_data: Subduction zone model data
+        depth_f: Depth function taking argument of position `depth_f(x)`
+        rtol: Relative tolerance of the numerical ODE integration
+        atol: Absolute tolerance of the numerical ODE integration
+
+    Returns:
+        Ocean-continent overriding side temperature
+    """
+    # Warn and ignore invalid depths
+    depth = depth_f(x) * slab_data.h_r
+    if np.any(depth < 0.0):
+        print(f"WARNING: (min, max) depth: "
+              f"({depth.min():.3e}, {depth.max():.3e})")
 
     depth[depth < 0.0] = 0.0
-    T = np.zeros_like(x[0])
-    q = np.zeros_like(x[0])
-    for x_c, Q, k, rho in slab_data.params_wedge:
-        if x_c is None:
-            cond = (depth >= x0)
-        else:
-            cond = (x0 <= depth) & (depth < x_c)
-        T[cond], q[cond] = T_soln(depth[cond], x0, T0, q0, Q, k)
-        if x_c is None:
-            break
-        T0, q0 = T_soln(x_c, x0, T0, q0, Q, k)
-        x0 = x_c
 
-    T = np.minimum(T, slab_data.Twedge_in)
-    # def print_depth(xc):
-    #     idx = np.argmin(np.abs(depth - xc))
-    #     Tbc = T[idx]
-    #     print(f"Tbc({int(xc/1e3)}km) = {Tbc}(K) = {Tbc-273.0}(C), depth({int(xc/1e3)}km) = {depth[idx]}")
-    # quit()
-    return T  # , q
+    # Second order ODE split into two first order ODEs
+    def f(y, d):
+        v, T = y
+        Q = slab_data.Q_wedge(d / slab_data.h_r)
+        k = slab_data.k_wedge(d / slab_data.h_r)
+        dydz = [-Q, v / k]
+        return dydz
+
+    # Initial conditions at depth d=0
+    y0 = [slab_data.q_surf, slab_data.Ts]
+
+    # Setup depth coordinates for integration. We prepend a depth of zero to
+    # provide appropriate initial conditions on all processes.
+    depth_asort = np.argsort(depth)
+    depth_coords = np.concatenate(([0], depth[depth_asort]))
+    sol = scipy.integrate.odeint(f, y0, depth_coords, rtol=rtol, atol=atol)
+
+    # Vector to hold temperature data
+    T = np.zeros_like(x[0])
+
+    # Transfer the solution but ignore the prepended 0 depth coordinate
+    T[depth_asort] = np.minimum(sol[1:, 1], slab_data.Twedge_in)
+    return T

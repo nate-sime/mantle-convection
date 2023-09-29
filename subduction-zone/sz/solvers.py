@@ -435,7 +435,7 @@ class Heat:
         Q.interpolate(
             lambda x: np.full_like(x[0], slab_data.Q_slab), cells=slab_cells)
         Q.interpolate(
-            lambda x: slab_data.Q_wedge(x, depth), cells=wedge_plate_cells)
+            lambda x: slab_data.Q_wedge(depth(x)), cells=wedge_plate_cells)
         Q.x.scatter_forward()
         Q_prime = slab_data.Q_prime(Q)
 
@@ -443,7 +443,7 @@ class Heat:
         k.interpolate(
             lambda x: np.full_like(x[0], slab_data.k_slab), cells=slab_cells)
         k.interpolate(
-            lambda x: slab_data.k_wedge(x, depth), cells=wedge_plate_cells)
+            lambda x: slab_data.k_wedge(depth(x)), cells=wedge_plate_cells)
         k.x.scatter_forward()
         k_prime = slab_data.k_prime(k)
 
@@ -451,7 +451,7 @@ class Heat:
         rho.interpolate(
             lambda x: np.full_like(x[0], slab_data.rho_slab), cells=slab_cells)
         rho.interpolate(
-            lambda x: slab_data.rho_wedge(x, depth), cells=wedge_plate_cells)
+            lambda x: slab_data.rho_wedge(depth(x)), cells=wedge_plate_cells)
         rho.x.scatter_forward()
 
         cp = dolfinx.fem.Constant(mesh, slab_data.cp)

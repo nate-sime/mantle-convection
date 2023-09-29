@@ -142,7 +142,7 @@ stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab,
                          use_iterative_solver=False)
 
 slab_inlet_temp = lambda x: model.slab_inlet_temp(x, slab_data, depth, 100e6)
-overriding_side_temp = lambda x: model.overriding_side_temp_heated(
+overriding_side_temp = lambda x: model.overriding_side_temp_heated_odeint(
     x, slab_data, depth)
 heat_problem.init(uh_full, slab_data, depth, slab_inlet_temp,
                   overriding_side_temp, use_iterative_solver = False)
