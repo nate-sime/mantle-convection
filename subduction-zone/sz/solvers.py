@@ -21,9 +21,7 @@ def steepest_descent(
             np.ndarray | ufl.core.expr.Expr] = None,):
     """
     Formulate the vector which lies tangential to a surface and maximises
-    the scalar projection with the vector `tau`. If the optional vector `d`
-    is provided, modify the projected vector such that it points in the
-    direction such that its scalar product with `d` is positive.
+    the scalar projection with the vector `tau`.
 
     Args:
         V: The function space into which to project
