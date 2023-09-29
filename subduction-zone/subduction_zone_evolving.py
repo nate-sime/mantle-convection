@@ -173,17 +173,17 @@ def solve_slab_problem(
     if use_coupling_depth := True:
         # Ideally a coupling depth is employed such that spurious flow is not
         # initiated in the plate.
-        plate_z = dolfinx.fem.Constant(
+        couple_depth = dolfinx.fem.Constant(
             wedge_mesh, np.array(sz_data.plate_thickness, dtype=np.float64))
-        couple_z = dolfinx.fem.Constant(
-            wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
+        full_couple_depth = dolfinx.fem.Constant(
+            wedge_mesh, np.array(couple_depth + 10.0, dtype=np.float64))
     else:
-        plate_z, couple_z = None, None
+        couple_depth, full_couple_depth = None, None
 
     tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
     wedge_interface_tangent = solvers.steepest_descent(
-        stokes_problem_wedge.V, tau, couple_depth=plate_z,
-        full_couple_depth=couple_z, depth=depth)
+        stokes_problem_wedge.V, tau, couple_depth=couple_depth,
+        full_couple_depth=full_couple_depth, depth=depth)
     slab_tangent_wedge = solvers.facet_local_projection(
         stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
         wedge_interface_tangent)
