@@ -182,8 +182,8 @@ def solve_slab_problem(
 
     tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
     wedge_interface_tangent = solvers.steepest_descent(
-        stokes_problem_wedge.V, tau, plate_depth=plate_z,
-        couple_depth=couple_z, depth=depth)
+        stokes_problem_wedge.V, tau, couple_depth=plate_z,
+        full_couple_depth=couple_z, depth=depth)
     slab_tangent_wedge = solvers.facet_local_projection(
         stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
         wedge_interface_tangent)

@@ -39,7 +39,7 @@ class Labels(enum.IntEnum):
         return str(int(self))
 
 
-@dataclasses.dataclass
+# @dataclasses.dataclass
 class SZData:
     # --- Physical data
     plate_thickness: float = 50.0  # km
@@ -54,6 +54,10 @@ class SZData:
     q_surf: float = 65e-3          # Surface heat flux, W / m^2
     u_conv_cm_yr: float = 5.0      # Slab convergence velocity, cm / yr
     h_r: float = 1000.0            # Length scale, m
+
+    @property
+    def overriding_side_temp(self):
+        return overriding_side_temp
 
     def Q_wedge(self, d: np.ndarray):
         return np.zeros_like(d)
@@ -140,6 +144,10 @@ class SZDataWilson2023(SZData):
 
     def rho_wedge(self, d: np.ndarray):
         return np.piecewise(d, [d <= 40.0, d <= 15.0], [2750.0, 2750.0, 3300.0])
+
+    @property
+    def overriding_side_temp(self):
+        return overriding_side_temp_heated_odeint
 
 
 def create_viscosity_isoviscous() -> callable:

@@ -109,18 +109,18 @@ Th_slab.x.scatter_forward()
 # The tangential velocity approximation for the BCs updates ghosts after
 # solving the projection inside solvers.tangent_approximation
 if use_coupling_depth := False:
-    plate_z = dolfinx.fem.Constant(
+    d_couple = dolfinx.fem.Constant(
         wedge_mesh, np.array(80.0, dtype=np.float64))
-    couple_z = dolfinx.fem.Constant(
-        wedge_mesh, np.array(plate_z + 3.0, dtype=np.float64))
+    d_fullcouple = dolfinx.fem.Constant(
+        wedge_mesh, np.array(d_couple + 3.0, dtype=np.float64))
 else:
-    plate_z, couple_z = None, None
+    d_couple, d_fullcouple = None, None
 
 tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
 wedge_u_conv = dolfinx.fem.Constant(wedge_mesh, sz_data.u_conv)
 wedge_interface_tangent = solvers.steepest_descent(
-        stokes_problem_wedge.V, tau, plate_depth=plate_z,
-    couple_depth=couple_z, depth=depth)
+        stokes_problem_wedge.V, tau, couple_depth=d_couple,
+    full_couple_depth=d_fullcouple, depth=depth)
 slab_tangent_wedge = solvers.facet_local_projection(
     stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
     wedge_u_conv * wedge_interface_tangent)
@@ -143,9 +143,7 @@ stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab,
 
 slab_inlet_temp = lambda x: model.slab_inlet_temp(
     x, sz_data, depth, sz_data.age_slab)
-# overriding_side_temp = lambda x: model.overriding_side_temp_heated_odeint(
-#     x, sz_data, depth)
-overriding_side_temp = lambda x: model.overriding_side_temp(
+overriding_side_temp = lambda x: sz_data.overriding_side_temp(
     x, sz_data, depth)
 heat_problem.init(uh_full, sz_data, depth, slab_inlet_temp,
                   overriding_side_temp, use_iterative_solver=False)
@@ -209,7 +207,6 @@ for picard_it in range(max_picard_its := 25):
 
 # Evaluate T at point of interest (poi)
 tree = dolfinx.geometry.bb_tree(mesh, mesh.geometry.dim)
-# poi = np.array([200.0, -100.0, 0], np.float64)
 poi = np.array([60.0, -60.0, 0], np.float64)
 cell_candidates = dolfinx.geometry.compute_collisions_points(tree, poi)
 cell_collided = dolfinx.geometry.compute_colliding_cells(

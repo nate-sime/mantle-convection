@@ -14,8 +14,8 @@ Labels = sz.model.Labels
 def steepest_descent(
         V: dolfinx.fem.FunctionSpace,
         tau: ufl.core.expr.Expr,
-        plate_depth: typing.Optional[float] = None,
         couple_depth: typing.Optional[float] = None,
+        full_couple_depth: typing.Optional[float] = None,
         depth: typing.Callable[
             [np.ndarray | ufl.core.expr.Expr],
             np.ndarray | ufl.core.expr.Expr] = None,):
@@ -28,8 +28,8 @@ def steepest_descent(
     Args:
         V: The function space into which to project
         tau: The direction of the tangent alignment to maximise
-        plate_depth: Depth of the plate
-        couple_depth: Depth of the coupling point
+        couple_depth: Depth of the velocity coupling
+        full_couple_depth: Depth of the full velocity coupling point
         depth: Function taking position x and returning depth
 
     Returns:
@@ -47,12 +47,13 @@ def steepest_descent(
         sd = ufl.cross(n, -ufl.cross(n, tau))
     sd /= ufl.sqrt(ufl.dot(sd, sd))
 
-    if plate_depth is not None and couple_depth is not None and depth is not None:
+    if couple_depth is not None and full_couple_depth is not None \
+            and depth is not None:
         x = ufl.SpatialCoordinate(V.mesh)
         sd *= ufl.max_value(
             0.0, ufl.min_value(
                 1.0,
-                (depth(x) - plate_depth) / (couple_depth - plate_depth)))
+                (depth(x) - couple_depth) / (full_couple_depth - couple_depth)))
     return sd
 
 
