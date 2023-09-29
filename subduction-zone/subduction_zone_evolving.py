@@ -181,26 +181,29 @@ def solve_slab_problem(
         couple_depth, full_couple_depth = None, None
 
     tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
+    wedge_u_conv = dolfinx.fem.Constant(wedge_mesh, sz_data.u_conv)
     wedge_interface_tangent = solvers.steepest_descent(
         stokes_problem_wedge.V, tau, couple_depth=couple_depth,
         full_couple_depth=full_couple_depth, depth=depth)
     slab_tangent_wedge = solvers.facet_local_projection(
         stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
-        wedge_interface_tangent)
+        wedge_u_conv * wedge_interface_tangent)
 
+    slab_u_conv = dolfinx.fem.Constant(slab_mesh, sz_data.u_conv)
     slab_interface_tangent = solvers.steepest_descent(
         stokes_problem_slab.V, tau)
     slab_tangent_slab = solvers.facet_local_projection(
         stokes_problem_slab.V, slab_facet_tags,
-        [Labels.slab_wedge, Labels.slab_plate], slab_interface_tangent)
+        [Labels.slab_wedge, Labels.slab_plate],
+        slab_u_conv * slab_interface_tangent)
 
     if slab_spline_m:
         import sz.spline_util
-        sz.spline_util.slab_velocity_kdtree(
+        sz.spline_util.deforming_slab_velocity_kdtree(
             slab_spline, slab_spline_m, slab_tangent_slab,
             slab_facet_tags.indices[np.isin(slab_facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))],
             dt, resolution=256)
-        sz.spline_util.slab_velocity_kdtree(
+        sz.spline_util.deforming_slab_velocity_kdtree(
             slab_spline, slab_spline_m, slab_tangent_wedge,
             wedge_facet_tags.indices[np.isin(wedge_facet_tags.values, (Labels.slab_wedge, Labels.slab_plate))],
             dt, resolution=256)
