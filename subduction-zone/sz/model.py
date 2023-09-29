@@ -40,7 +40,7 @@ class Labels(enum.IntEnum):
 
 
 @dataclasses.dataclass
-class SlabData:
+class SZData:
     # --- Physical data
     plate_thickness: float = 40.0  # km
     Ts: float = 273.0              # Surface temperature, K
@@ -137,7 +137,7 @@ def create_viscosity_diffusion_creep(mesh: dolfinx.mesh.Mesh) -> callable:
 
 
 def create_viscosity_dislocation_creep(
-        mesh: dolfinx.mesh.Mesh, slab_data: SlabData) -> callable:
+        mesh: dolfinx.mesh.Mesh, slab_data: SZData) -> callable:
     R = dolfinx.fem.Constant(mesh, 8.3145)
     eta_max = dolfinx.fem.Constant(mesh, 1e26)
     eta_scale = dolfinx.fem.Constant(mesh, 1e21)
@@ -195,7 +195,7 @@ def gkb_wedge_flow(x: typing.Sequence[float], x0: typing.Sequence[float])\
 
 
 def slab_inlet_temp(
-        x: np.ndarray, slab_data: SlabData, depth: callable,
+        x: np.ndarray, slab_data: SZData, depth: callable,
         age_lithosphere_yr: float) -> np.ndarray:
     """
     Inlet temperature on the slab as a function of depth
@@ -218,7 +218,7 @@ def slab_inlet_temp(
 
 
 def overriding_side_temp(
-        x: np.ndarray, slab_data: SlabData, depth: callable) -> np.ndarray:
+        x: np.ndarray, slab_data: SZData, depth: callable) -> np.ndarray:
     """
     Inlet temperature on the wedge as a function of depth
 
@@ -236,7 +236,7 @@ def overriding_side_temp(
 
 
 def overriding_side_temp_heated_odeint(
-        x: np.ndarray, slab_data: SlabData, depth_f: callable,
+        x: np.ndarray, slab_data: SZData, depth_f: callable,
         rtol: float = 1e2 * np.finfo(np.float64).eps,
         atol: float = 1e2 * np.finfo(np.float64).eps) -> np.ndarray:
     """

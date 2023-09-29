@@ -11,7 +11,7 @@ def print0(*args):
     PETSc.Sys.Print(" ".join(map(str, args)))
 
 
-slab_data = model.SlabData()
+slab_data = model.SZData()
 Labels = model.Labels
 
 # Read meshes and partition over all processes
