@@ -224,7 +224,7 @@ if __name__ == "__main__":
     from mpi4py import MPI
 
     # Geometry parameters
-    benchmark = "Wilson2023"
+    benchmark = "vanKeken2010"
     if benchmark == "vanKeken2010":
         dip_angle = 45
         depth = 600.0

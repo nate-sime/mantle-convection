@@ -411,10 +411,10 @@ class Heat:
         self.S = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order))
         self.DG_material = dolfinx.fem.FunctionSpace(mesh, ("DG", 0))
 
-    def init(self, uh: dolfinx.fem.Function, slab_data, depth: callable,
+    def init(self, uh: dolfinx.fem.Function, sz_data, depth: callable,
              slab_inlet_temp: callable, overriding_side_temp: callable,
              use_iterative_solver: bool, Th0: dolfinx.fem.Function = None,
-             dt: dolfinx.fem.Constant = None,):
+             dt: dolfinx.fem.Constant = None, ):
         if (Th0 is None) ^ (dt is None):
             raise RuntimeError(
                 "Time dependent formulation requires Th0 and dt")
@@ -433,28 +433,28 @@ class Heat:
             np.isin(self.cell_tags.values, (Labels.wedge, Labels.plate))]
         Q = dolfinx.fem.Function(self.DG_material)
         Q.interpolate(
-            lambda x: np.full_like(x[0], slab_data.Q_slab), cells=slab_cells)
+            lambda x: np.full_like(x[0], sz_data.Q_slab), cells=slab_cells)
         Q.interpolate(
-            lambda x: slab_data.Q_wedge(depth(x)), cells=wedge_plate_cells)
+            lambda x: sz_data.Q_wedge(depth(x)), cells=wedge_plate_cells)
         Q.x.scatter_forward()
-        Q_prime = slab_data.Q_prime(Q)
+        Q_prime = sz_data.Q_prime(Q)
 
         k = dolfinx.fem.Function(self.DG_material)
         k.interpolate(
-            lambda x: np.full_like(x[0], slab_data.k_slab), cells=slab_cells)
+            lambda x: np.full_like(x[0], sz_data.k_slab), cells=slab_cells)
         k.interpolate(
-            lambda x: slab_data.k_wedge(depth(x)), cells=wedge_plate_cells)
+            lambda x: sz_data.k_wedge(depth(x)), cells=wedge_plate_cells)
         k.x.scatter_forward()
-        k_prime = slab_data.k_prime(k)
+        k_prime = sz_data.k_prime(k)
 
         rho = dolfinx.fem.Function(self.DG_material)
         rho.interpolate(
-            lambda x: np.full_like(x[0], slab_data.rho_slab), cells=slab_cells)
+            lambda x: np.full_like(x[0], sz_data.rho_slab), cells=slab_cells)
         rho.interpolate(
-            lambda x: slab_data.rho_wedge(depth(x)), cells=wedge_plate_cells)
+            lambda x: sz_data.rho_wedge(depth(x)), cells=wedge_plate_cells)
         rho.x.scatter_forward()
 
-        cp = dolfinx.fem.Constant(mesh, slab_data.cp)
+        cp = dolfinx.fem.Constant(mesh, sz_data.cp)
 
         # Heat system
         a_T = (

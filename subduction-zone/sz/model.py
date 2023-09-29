@@ -42,26 +42,27 @@ class Labels(enum.IntEnum):
 @dataclasses.dataclass
 class SZData:
     # --- Physical data
-    plate_thickness: float = 40.0  # km
+    plate_thickness: float = 50.0  # km
     Ts: float = 273.0              # Surface temperature, K
-    Twedge_in: float = 1623.0      # Maximum temperature, K
-    k_slab: float = 3.1            # Thermal conductivity in slab, W / (m K)
+    Tmantle: float = 1573.0        # Maximum temperature, K
+    k_slab: float = 3.0            # Thermal conductivity in slab, W / (m K)
     rho_slab: float = 3300.0       # Density in slab, kg / m^3
     Q_slab: float = 0.0            # Rate of heat production, W / m^3
+    age_slab: float = 50e6         # Age of incoming slab, yr
     cp: float = 1250.0             # Heat capacity, J / (kg K)
     u0_m_yr: float = 0.05          # Speed scale, m / yr
     q_surf: float = 65e-3          # Surface heat flux, W / m^2
-    u_conv_cm_yr: float = 10.0     # Slab convergence velocity, cm / yr
+    u_conv_cm_yr: float = 5.0      # Slab convergence velocity, cm / yr
     h_r: float = 1000.0            # Length scale, m
 
     def Q_wedge(self, d: np.ndarray):
-        return np.piecewise(d, [d <= 40.0, d <= 15.0], [0.27e-6, 1.3e-6, 0.0])
+        return np.zeros_like(d)
 
     def k_wedge(self, d: np.ndarray):
-        return np.piecewise(d, [d <= 40.0, d <= 15.0], [2.5, 2.5, 3.1])
+        return np.full_like(d, 3.0)
 
     def rho_wedge(self, d: np.ndarray):
-        return np.piecewise(d, [d <= 40.0, d <= 15.0], [2750.0, 2750.0, 3300.0])
+        return np.full_like(d, 3300.0)
 
     def k_prime(self, k):
         """
@@ -116,6 +117,31 @@ class SZData:
         return self.t_yr_to_s(t) / self.t_r
 
 
+class SZDataWilson2023(SZData):
+    # --- Physical data
+    plate_thickness: float = 40.0  # km
+    Ts: float = 273.0              # Surface temperature, K
+    Tmantle: float = 1623.0      # Maximum temperature, K
+    k_slab: float = 3.1            # Thermal conductivity in slab, W / (m K)
+    rho_slab: float = 3300.0       # Density in slab, kg / m^3
+    Q_slab: float = 0.0            # Rate of heat production, W / m^3
+    age_slab: float = 100e6        # Age of incoming slab, yr
+    cp: float = 1250.0             # Heat capacity, J / (kg K)
+    u0_m_yr: float = 0.05          # Speed scale, m / yr
+    q_surf: float = 65e-3          # Surface heat flux, W / m^2
+    u_conv_cm_yr: float = 10.0     # Slab convergence velocity, cm / yr
+    h_r: float = 1000.0            # Length scale, m
+
+    def Q_wedge(self, d: np.ndarray):
+        return np.piecewise(d, [d <= 40.0, d <= 15.0], [0.27e-6, 1.3e-6, 0.0])
+
+    def k_wedge(self, d: np.ndarray):
+        return np.piecewise(d, [d <= 40.0, d <= 15.0], [2.5, 2.5, 3.1])
+
+    def rho_wedge(self, d: np.ndarray):
+        return np.piecewise(d, [d <= 40.0, d <= 15.0], [2750.0, 2750.0, 3300.0])
+
+
 def create_viscosity_isoviscous() -> callable:
     def eta(u, T):
         return 1
@@ -137,7 +163,7 @@ def create_viscosity_diffusion_creep(mesh: dolfinx.mesh.Mesh) -> callable:
 
 
 def create_viscosity_dislocation_creep(
-        mesh: dolfinx.mesh.Mesh, slab_data: SZData) -> callable:
+        mesh: dolfinx.mesh.Mesh, sz_data: SZData) -> callable:
     R = dolfinx.fem.Constant(mesh, 8.3145)
     eta_max = dolfinx.fem.Constant(mesh, 1e26)
     eta_scale = dolfinx.fem.Constant(mesh, 1e21)
@@ -148,7 +174,7 @@ def create_viscosity_dislocation_creep(
 
     def eta(u, T):
         edot = ufl.sym(ufl.grad(u))
-        eII = slab_data.u_r / slab_data.h_r * ufl.sqrt(
+        eII = sz_data.u_r / sz_data.h_r * ufl.sqrt(
             0.5 * ufl.inner(edot, edot))
         eta_disl = Adisl * ufl.exp(Edisl / (n_val * R * T)) * eII ** n_exp
         eta_eff = (eta_max * eta_disl) / (eta_max + eta_disl)
@@ -156,8 +182,7 @@ def create_viscosity_dislocation_creep(
     return eta
 
 
-def gkb_wedge_flow(x: typing.Sequence[float], x0: typing.Sequence[float])\
-        -> np.ndarray:
+def gkb_wedge_flow(x: typing.Sequence[float], x0: float) -> np.ndarray:
     """
     Isoviscous wedge flow analytical solution from 'An Introduction to Fluid
     Dynamics', G.K.Batchelor. Intended for 45 degree straight downward dipping
@@ -195,48 +220,48 @@ def gkb_wedge_flow(x: typing.Sequence[float], x0: typing.Sequence[float])\
 
 
 def slab_inlet_temp(
-        x: np.ndarray, slab_data: SZData, depth: callable,
+        x: np.ndarray, sz_data: SZData, depth: callable,
         age_lithosphere_yr: float) -> np.ndarray:
     """
     Inlet temperature on the slab as a function of depth
 
     Args:
         x: Spatial coordinate
-        slab_data: Slab model data
+        sz_data: Slab model data
         depth: Callable function returning depth as a function of x
         age_lithosphere_yr: Age of lithosphere in units of years
     """
     vals = np.zeros((1, x.shape[1]))
-    Ts = slab_data.Ts
-    Twedge_in = slab_data.Twedge_in
-    z_scale = slab_data.h_r
-    kappa = slab_data.k_slab / (slab_data.rho_slab * slab_data.cp)
-    vals[0] = Ts + (Twedge_in - Ts) * scipy.special.erf(
+    Ts = sz_data.Ts
+    Tmantle = sz_data.Tmantle
+    z_scale = sz_data.h_r
+    kappa = sz_data.k_slab / (sz_data.rho_slab * sz_data.cp)
+    vals[0] = Ts + (Tmantle - Ts) * scipy.special.erf(
         depth(x) * z_scale / (2.0 * np.sqrt(
-            kappa * slab_data.t_yr_to_s(age_lithosphere_yr))))
+            kappa * sz_data.t_yr_to_s(age_lithosphere_yr))))
     return vals
 
 
 def overriding_side_temp(
-        x: np.ndarray, slab_data: SZData, depth: callable) -> np.ndarray:
+        x: np.ndarray, sz_data: SZData, depth: callable) -> np.ndarray:
     """
     Inlet temperature on the wedge as a function of depth
 
     Args:
         x: Spatial coordinate
-        slab_data: Slab model data
+        sz_data: Slab model data
         depth: Callable function returning depth as a function of x
     """
     vals = np.zeros((1, x.shape[1]))
-    Ts = slab_data.Ts
-    T0 = slab_data.Twedge_in
-    Zplate = slab_data.plate_thickness
+    Ts = sz_data.Ts
+    T0 = sz_data.Tmantle
+    Zplate = sz_data.plate_thickness
     vals[0] = np.minimum(Ts - (T0 - Ts) / Zplate * (-depth(x)), T0)
     return vals
 
 
 def overriding_side_temp_heated_odeint(
-        x: np.ndarray, slab_data: SZData, depth_f: callable,
+        x: np.ndarray, sz_data: SZData, depth_f: callable,
         rtol: float = 1e2 * np.finfo(np.float64).eps,
         atol: float = 1e2 * np.finfo(np.float64).eps) -> np.ndarray:
     """
@@ -251,7 +276,7 @@ def overriding_side_temp_heated_odeint(
 
     Args:
         x: Position
-        slab_data: Subduction zone model data
+        sz_data: Subduction zone model data
         depth_f: Depth function taking argument of position `depth_f(x)`
         rtol: Relative tolerance of the numerical ODE integration
         atol: Absolute tolerance of the numerical ODE integration
@@ -260,7 +285,7 @@ def overriding_side_temp_heated_odeint(
         Ocean-continent overriding side temperature
     """
     # Warn and ignore invalid depths
-    depth = depth_f(x) * slab_data.h_r
+    depth = depth_f(x) * sz_data.h_r
     if np.any(depth < 0.0):
         print(f"WARNING: (min, max) depth: "
               f"({depth.min():.3e}, {depth.max():.3e})")
@@ -270,13 +295,13 @@ def overriding_side_temp_heated_odeint(
     # Second order ODE split into two first order ODEs
     def f(y, d):
         v, T = y
-        Q = slab_data.Q_wedge(d / slab_data.h_r)
-        k = slab_data.k_wedge(d / slab_data.h_r)
+        Q = sz_data.Q_wedge(d / sz_data.h_r)
+        k = sz_data.k_wedge(d / sz_data.h_r)
         dydz = [-Q, v / k]
         return dydz
 
     # Initial conditions at depth d=0
-    y0 = [slab_data.q_surf, slab_data.Ts]
+    y0 = [sz_data.q_surf, sz_data.Ts]
 
     # Setup depth coordinates for integration. We prepend a depth of zero to
     # provide appropriate initial conditions on all processes.
@@ -288,5 +313,5 @@ def overriding_side_temp_heated_odeint(
     T = np.zeros_like(x[0])
 
     # Transfer the solution but ignore the prepended 0 depth coordinate
-    T[depth_asort] = np.minimum(sol[1:, 1], slab_data.Twedge_in)
+    T[depth_asort] = np.minimum(sol[1:, 1], sz_data.Tmantle)
     return T
