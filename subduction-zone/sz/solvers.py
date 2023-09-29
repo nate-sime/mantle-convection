@@ -403,14 +403,18 @@ class StokesEvolving(Stokes):
 
 class Heat:
 
-    def __init__(self, mesh, facet_tags, p_order):
+    def __init__(self, mesh, cell_tags, facet_tags, p_order):
         self.mesh = mesh
+        self.cell_tags = cell_tags
         self.facet_tags = facet_tags
         self.p_order = p_order
         self.S = dolfinx.fem.FunctionSpace(mesh, ("CG", p_order))
+        self.DG_material = dolfinx.fem.FunctionSpace(mesh, ("DG", 0))
 
-    def init(self, uh, slab_data, depth, use_iterative_solver,
-             Th0: dolfinx.fem.Function=None, dt: dolfinx.fem.Constant=None):
+    def init(self, uh: dolfinx.fem.Function, slab_data, depth: callable,
+             slab_inlet_temp: callable, overriding_side_temp: callable,
+             use_iterative_solver: bool, Th0: dolfinx.fem.Function = None,
+             dt: dolfinx.fem.Constant = None,):
         if (Th0 is None) ^ (dt is None):
             raise RuntimeError(
                 "Time dependent formulation requires Th0 and dt")
@@ -422,25 +426,51 @@ class Heat:
         T = ufl.TrialFunction(S)
         s = ufl.TestFunction(S)
 
+        # Material coefficients
+        slab_cells = self.cell_tags.indices[
+            self.cell_tags.values == Labels.slab]
+        wedge_plate_cells = self.cell_tags.indices[
+            np.isin(self.cell_tags.values, (Labels.wedge, Labels.plate))]
+        Q = dolfinx.fem.Function(self.DG_material)
+        Q.interpolate(
+            lambda x: np.full_like(x[0], slab_data.Q_slab), cells=slab_cells)
+        Q.interpolate(
+            lambda x: slab_data.Q_wedge(x, depth), cells=wedge_plate_cells)
+        Q.x.scatter_forward()
+        Q_prime = slab_data.Q_prime(Q)
+
+        k = dolfinx.fem.Function(self.DG_material)
+        k.interpolate(
+            lambda x: np.full_like(x[0], slab_data.k_slab), cells=slab_cells)
+        k.interpolate(
+            lambda x: slab_data.k_wedge(x, depth), cells=wedge_plate_cells)
+        k.x.scatter_forward()
+        k_prime = slab_data.k_prime(k)
+
+        rho = dolfinx.fem.Function(self.DG_material)
+        rho.interpolate(
+            lambda x: np.full_like(x[0], slab_data.rho_slab), cells=slab_cells)
+        rho.interpolate(
+            lambda x: slab_data.rho_wedge(x, depth), cells=wedge_plate_cells)
+        rho.x.scatter_forward()
+
+        cp = dolfinx.fem.Constant(mesh, slab_data.cp)
+
         # Heat system
         a_T = (
-            ufl.inner(slab_data.k_prime * ufl.grad(T), ufl.grad(s)) * ufl.dx
-            + ufl.inner(ufl.dot(slab_data.rho * slab_data.cp * uh, ufl.grad(T)), s) * ufl.dx
+            ufl.inner(k_prime * ufl.grad(T), ufl.grad(s)) * ufl.dx
+            + ufl.inner(ufl.dot(rho * cp * uh, ufl.grad(T)), s) * ufl.dx
         )
-        Q_prime_constant = dolfinx.fem.Constant(mesh, slab_data.Q_prime)
-        L_T = ufl.inner(Q_prime_constant, s) * ufl.dx
+        L_T = ufl.inner(Q_prime, s) * ufl.dx
 
         if Th0 is not None:
-            a_T += ufl.inner(
-                slab_data.rho * slab_data.cp * T / dt, s) * ufl.dx
-            L_T += ufl.inner(
-                slab_data.rho * slab_data.cp * Th0 / dt, s) * ufl.dx
+            a_T += ufl.inner(rho * cp * T / dt, s) * ufl.dx
+            L_T += ufl.inner(rho * cp * Th0 / dt, s) * ufl.dx
 
         # Weak heat BCs
-        overring_temp = dolfinx.fem.Function(S)
-        overring_temp.interpolate(
-            lambda x: sz.model.overriding_side_temp(x, slab_data, depth))
-        overring_temp.x.scatter_forward()
+        overriding_temp = dolfinx.fem.Function(S)
+        overriding_temp.interpolate(overriding_side_temp)
+        overriding_temp.x.scatter_forward()
 
         ds = ufl.Measure("ds", subdomain_data=facet_tags)
         alpha = dolfinx.fem.Constant(mesh, 20.0 * max(self.p_order, 1)**2)
@@ -449,14 +479,14 @@ class Heat:
         ds_right = ds((Labels.wedge_right, Labels.plate_right))
         inlet_condition = ufl.conditional(ufl.lt(ufl.dot(uh, n), 0), 1, 0)
         a_T += inlet_condition * (
-                ufl.inner(slab_data.k_prime * alpha / h * T, s)
-                - ufl.inner(slab_data.k_prime * ufl.grad(T), s * n)
-                - ufl.inner(slab_data.k_prime * ufl.grad(s), T * n)
+                ufl.inner(k_prime * alpha / h * T, s)
+                - ufl.inner(k_prime * ufl.grad(T), s * n)
+                - ufl.inner(k_prime * ufl.grad(s), T * n)
         ) * ds_right
-        T_D = overring_temp
+        T_D = overriding_temp
         L_T += inlet_condition * (
-                ufl.inner(slab_data.k_prime * alpha / h * T_D, s)
-                - ufl.inner(slab_data.k_prime * ufl.grad(s), T_D * n)
+                ufl.inner(k_prime * alpha / h * T_D, s)
+                - ufl.inner(k_prime * ufl.grad(s), T_D * n)
         ) * ds_right
 
         a_T, L_T = map(dolfinx.fem.form, (a_T, L_T))
@@ -464,8 +494,7 @@ class Heat:
         # Strong heat BCs
         inlet_facets = facet_tags.indices[facet_tags.values == Labels.slab_left]
         inlet_temp = dolfinx.fem.Function(S)
-        inlet_temp.interpolate(
-            lambda x: sz.model.slab_inlet_temp(x, slab_data, depth))
+        inlet_temp.interpolate(slab_inlet_temp)
         inlet_temp.x.scatter_forward()
         bc_inlet = dolfinx.fem.dirichletbc(
             inlet_temp, dolfinx.fem.locate_dofs_topological(
@@ -476,7 +505,7 @@ class Heat:
             # (facet_tags.values == Labels.plate_right)
         ]
         bc_overriding = dolfinx.fem.dirichletbc(
-            overring_temp, dolfinx.fem.locate_dofs_topological(
+            overriding_temp, dolfinx.fem.locate_dofs_topological(
                 S, mesh.topology.dim-1, overriding_facets))
 
         self.bcs_T = [bc_inlet, bc_overriding]

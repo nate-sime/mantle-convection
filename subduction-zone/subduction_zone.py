@@ -37,7 +37,7 @@ p_order = 2
 tdim = mesh.topology.dim
 stokes_problem_wedge = solvers.Stokes(wedge_mesh, wedge_facet_tags, p_order)
 stokes_problem_slab = solvers.Stokes(slab_mesh, slab_facet_tags, p_order)
-heat_problem = solvers.Heat(mesh, facet_tags, p_order)
+heat_problem = solvers.Heat(mesh, cell_tags, facet_tags, p_order)
 
 # Define depth as a measure of distance from the surface
 match tdim:
@@ -108,26 +108,29 @@ Th_slab.x.scatter_forward()
 # Initialise the solvers generating underlying matrices, vectors and KSPs.
 # The tangential velocity approximation for the BCs updates ghosts after
 # solving the projection inside solvers.tangent_approximation
-if use_coupling_depth := False:
+if use_coupling_depth := True:
     plate_z = dolfinx.fem.Constant(
-        wedge_mesh, np.array(slab_data.plate_thickness, dtype=np.float64))
+        wedge_mesh, np.array(80.0, dtype=np.float64))
     couple_z = dolfinx.fem.Constant(
-        wedge_mesh, np.array(plate_z + 10.0, dtype=np.float64))
+        wedge_mesh, np.array(plate_z + 3.0, dtype=np.float64))
 else:
     plate_z, couple_z = None, None
 
 tau = ufl.as_vector((0, -1) if tdim == 2 else (0, 0, -1))
+wedge_u_conv = dolfinx.fem.Constant(wedge_mesh, slab_data.u_conv)
 wedge_interface_tangent = solvers.steepest_descent(
         stokes_problem_wedge.V, tau, plate_depth=plate_z,
     couple_depth=couple_z, depth=depth)
 slab_tangent_wedge = solvers.facet_local_projection(
     stokes_problem_wedge.V, wedge_facet_tags, Labels.slab_wedge,
-    wedge_interface_tangent)
+    wedge_u_conv * wedge_interface_tangent)
 
+slab_u_conv = dolfinx.fem.Constant(slab_mesh, slab_data.u_conv)
 slab_interface_tangent = solvers.steepest_descent(stokes_problem_slab.V, tau)
 slab_tangent_slab = solvers.facet_local_projection(
     stokes_problem_slab.V, slab_facet_tags,
-    [Labels.slab_wedge, Labels.slab_plate], slab_interface_tangent)
+    [Labels.slab_wedge, Labels.slab_plate],
+    slab_u_conv * slab_interface_tangent)
 
 eta_wedge_is_linear = True
 eta_wedge = model.create_viscosity_isoviscous()
@@ -137,7 +140,12 @@ stokes_problem_wedge.init(uh_wedge, Th_wedge, eta_wedge, slab_tangent_wedge,
                           use_iterative_solver=False)
 stokes_problem_slab.init(uh_slab, Th_slab, eta_slab, slab_tangent_slab,
                          use_iterative_solver=False)
-heat_problem.init(uh_full, slab_data, depth, use_iterative_solver=False)
+
+slab_inlet_temp = lambda x: model.slab_inlet_temp(x, slab_data, depth, 100e6)
+overriding_side_temp = lambda x: model.overriding_side_temp_heated(
+    x, slab_data, depth)
+heat_problem.init(uh_full, slab_data, depth, slab_inlet_temp,
+                  overriding_side_temp, use_iterative_solver = False)
 
 # Useful initial guess for strainrate dependent viscosities
 if tdim == 2:
@@ -197,7 +205,8 @@ for picard_it in range(max_picard_its := 25):
     Th0.x.scatter_forward()
 
 tree = dolfinx.geometry.bb_tree(mesh, mesh.geometry.dim)
-points6060 = np.array([60.0, -60.0, 0], np.float64)
+points6060 = np.array([200.0, -100.0, 0], np.float64)
+# points6060 = np.array([60.0, -60.0, 0], np.float64)
 cell_candidates = dolfinx.geometry.compute_collisions_points(tree, points6060)
 cell_collided = dolfinx.geometry.compute_colliding_cells(
     mesh, cell_candidates, points6060)
@@ -209,7 +218,7 @@ if len(cell_collided) > 0:
 T_6060 = mesh.comm.gather(T_6060, root=0)
 
 if mesh.comm.rank == 0:
-    print(f"T_6060 = {[T_val for T_val in T_6060 if T_val is not None]}",
+    print(f"T_6060 = {[T_val for T_val in T_6060 if T_val is not None]} C",
           flush=True)
 
 with dolfinx.io.VTXWriter(mesh.comm, "temperature.bp", Th, "bp4") as f:
