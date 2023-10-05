@@ -28,7 +28,7 @@ with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "disk.xdmf", "r") as fi:
 # Due to the complexity of the formulation the FFCx implicit quadrature degree
 # evaluation is typically too large. Here we use a low order approximation.
 dx = ufl.dx(metadata={"quadrature_degree": 4})
-matrix_type = MatrixType.nest
+matrix_type = MatrixType.block
 
 # Material coefficients
 h_on_delta = dolfinx.fem.Constant(mesh, 4.0)
