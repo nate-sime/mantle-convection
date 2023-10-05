@@ -4,5 +4,5 @@
 | Example                 | Image                                                     |
 |-------------------------|-----------------------------------------------------------|
 | Sectant cell convection | ![sectant](sectant-convection/img/sectant_convection.gif) |
-| Porosity shear bands    | ![shearbands](shearbands/img/shearbands.gif)              |
-| Subduction zone         | ![subduction zone](subduction-zone/img/evolving2d.gif) |
+| Porosity shear bands    | ![shearbands](shearbands/img/shearbands3d.gif)            |
+| Subduction zone         | ![subduction zone](subduction-zone/img/evolving2d.gif)    |
