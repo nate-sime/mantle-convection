@@ -1,11 +1,19 @@
 import enum
+import typing
+import numpy as np
 
 from petsc4py import PETSc
 import dolfinx
 import ufl
 
 
-def derivative_block(F, u, du=None, coefficient_derivatives=None):
+def derivative_block(
+        F: ufl.Form | typing.Sequence[ufl.Form],
+        u: ufl.Coefficient | typing.Sequence[ufl.Coefficient],
+        du: typing.Optional[
+            ufl.Coefficient | typing.Sequence[ufl.Coefficient]] = None,
+        coefficient_derivatives: typing.Optional[
+            typing.Dict[ufl.Coefficient, ufl.core.expr.Expr]] = None):
     """
     Parameters
     ----------
@@ -173,3 +181,47 @@ class NonlinearPDE_SNESProblem():
             dolfinx.fem.petsc.assemble_matrix_nest(
                 P, self.a_precon, bcs=self.bcs, diagonal=1.0)
             P.assemble()
+
+
+def build_symmetric_gradient_nullspace(
+        V: dolfinx.fem.FunctionSpaceBase) -> PETSc.NullSpace:
+    """
+    Create an orthonormalized sequence of vectors spanning the nullspace of
+    the symmetric gradient operator, i.e., the rigid body modes.
+
+    Args:
+        V: Appropriate vector function space
+
+    Returns:
+    Nullspace for use with PETSc
+    """
+    mesh = V.mesh
+    if mesh.geometry.dim == 3:
+        nullspace_lmbdas = [lambda x: np.vstack((np.ones_like(x[0]),
+                                                np.zeros_like(x[0]),
+                                                np.zeros_like(x[0]))),
+                           lambda x: np.vstack((np.zeros_like(x[0]),
+                                                np.ones_like(x[0]),
+                                                np.zeros_like(x[0]))),
+                           lambda x: np.vstack((np.zeros_like(x[0]),
+                                                np.zeros_like(x[0]),
+                                                np.ones_like(x[0]))),
+                           lambda x: np.vstack(
+                               (-x[1], x[0], np.zeros_like(x[0]))),
+                           lambda x: np.vstack(
+                               (x[2], np.zeros_like(x[0]), -x[0])),
+                           lambda x: np.vstack(
+                               (np.zeros_like(x[0]), -x[2], x[1]))]
+    elif mesh.geometry.dim == 2:
+        nullspace_lmbdas = [lambda x: np.vstack((np.ones_like(x[0]),
+                                                np.zeros_like(x[0]))),
+                           lambda x: np.vstack((np.zeros_like(x[0]),
+                                                np.ones_like(x[0]))),
+                           lambda x: np.vstack((-x[1], x[0]))]
+
+    rbms = [dolfinx.fem.Function(V) for _ in range(mesh.geometry.dim + 1)]
+    for rbm, null_spc_lmbda in zip(rbms, nullspace_lmbdas):
+        rbm.interpolate(null_spc_lmbda)
+
+    dolfinx.cpp.la.orthonormalize([rbm.x._cpp_object for rbm in rbms])
+    return PETSc.NullSpace().create(vectors=[rbm.vector for rbm in rbms])
