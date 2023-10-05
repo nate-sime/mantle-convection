@@ -25,6 +25,8 @@ with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "disk.xdmf", "r") as fi:
     mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
     facet_tags = fi.read_meshtags(mesh, name="facets")
 
+# Due to the complexity of the formulation the FFCx implicit quadrature degree
+# evaluation is typically too large. Here we use a low order approximation.
 dx = ufl.dx(metadata={"quadrature_degree": 4})
 matrix_type = MatrixType.block
 
@@ -66,6 +68,7 @@ count_dofs = lambda V: V.dofmap.index_map.size_global * V.dofmap.index_map_bs
 print0(f"Problem dim: (Qc: {count_dofs(QC):,} "
        f"Phi: {count_dofs(PHI):,} Q: {count_dofs(Q):,} V: {count_dofs(V):,})")
 
+
 # Boundary conditions
 def rot_flow(x: np.ndarray, direction: int):
     assert direction in (1, 2)
@@ -73,13 +76,16 @@ def rot_flow(x: np.ndarray, direction: int):
     cw = [direction_switch * x[1], - direction_switch * x[0]]
     cw += [np.zeros_like(x[0])] if mesh.topology.dim == 3 else []
     cw = np.stack(cw)
-    # cw_norm = np.linalg.norm(cw, axis=0)
-    return cw #/ cw_norm
+    return cw
+
 
 if mesh.topology.dim == 2:
+    # Fixed inner ring
     u_inner = dolfinx.fem.Function(V)
-    u_inner.interpolate(lambda x: 0.0*rot_flow(x, 1))
+    u_inner.interpolate(lambda x: np.zeros_like(x[:2]))
     u_inner.x.scatter_forward()
+
+    # Rotating outer ring
     u_outer = dolfinx.fem.Function(V)
     u_outer.interpolate(lambda x: rot_flow(x, 2))
     u_outer.x.scatter_forward()
@@ -96,6 +102,7 @@ if mesh.topology.dim == 2:
 
     bcs_V = [bc_top, bc_bottom]
 elif mesh.topology.dim == 3:
+    # Rotating cylinder
     max_h = 1.0
     u_bdry = dolfinx.fem.Function(V)
     u_bdry.interpolate(lambda x: 8.0 / 3.0 * rot_flow(x, 1) * (x[2] / max_h))
@@ -110,14 +117,17 @@ elif mesh.topology.dim == 3:
 
     bcs_V = [u_bc]
 
+# Cell measures of high order geometries are not supported inherently by UFL
+# and FFCx. Here we compute the measure of cell volume.
 h = dolfinx.fem.Function(dolfinx.fem.FunctionSpace(mesh, ("DG", 0)))
 h.vector.array[:] = dolfinx.cpp.mesh.h(
     mesh._cpp_object, mesh.topology.dim, np.arange(
         mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32))
-
 h_measure = dolfinx.cpp.mesh.h(
     mesh._cpp_object, mesh.topology.dim, np.arange(
         mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32))
+
+# Parameters used for time stepping and CFL criterion estimation
 hmin = mesh.comm.allreduce(h_measure.min(), op=MPI.MIN)
 dt = dolfinx.fem.Constant(mesh, 1.25e-1 * hmin)
 t = dolfinx.fem.Constant(mesh, 0.0)
@@ -128,22 +138,28 @@ p_th = 0.5*(p + p_n)
 phi_th = 0.5*(phi + phi_n)
 p_c_th = 0.5*(p_c + p_c_n)
 
+
 # Variational formulations
 def eps(u):
     return ufl.sym(ufl.grad(u))
 
+
 def eta(u, phi):
-    eps_II = ufl.sqrt(0.5 * ufl.inner(eps(u), eps(u))
-                      + dolfinx.fem.Constant(mesh, 1e-9))
+    # Second invariant of strain with numerical tolerance
+    d_eps = dolfinx.fem.Constant(mesh, np.finfo(mesh.geometry.x.dtype).eps)
+    eps_II = ufl.sqrt(0.5 * ufl.inner(eps(u), eps(u)) + d_eps)
     return eta_0 * ufl.exp(alpha*phi_0*(phi - 1.0)) * eps_II ** nexp
+
 
 def sigma(u, phi):
     return 2*eta(u, phi)*eps(u)
+
 
 K = phi_th**n
 zeta = phi_th**(-m)
 xi = eta(u_th, phi_th)*(zeta - 2.0/3.0*phi_0**m)
 
+# Porosity advection
 f1 = (
         (phi - phi_n) * psi * dx
         + dt * (
@@ -151,13 +167,16 @@ f1 = (
                 - ufl.inner(phi_0**(m-1)*(1 - phi_0*phi_th) * p_c_th / xi,  psi) * dx
         )
 )
+# Fluid flow
 f2 = (
         ufl.inner(K * (ufl.grad(p_c) + ufl.grad(p)), ufl.grad(q_c)) * dx
         + ufl.inner(h_on_delta ** 2 * p_c / xi, q_c) * dx
 )
+# Solid flow
 f3 = (
         ufl.inner(sigma(u, phi), eps(v))*dx - ufl.inner(p, ufl.div(v))*dx
 )
+# Mass conservation
 f4 = (
         -ufl.inner(ufl.div(u), q)*dx
         + ufl.inner(phi_0**m*p_c/xi, q)*dx
@@ -179,32 +198,6 @@ P = [[J[0][0], J[0][1], J[0][2], J[0][3]],
 
 if matrix_type is MatrixType.block:
     P = None
-
-# nullspace_phi = Function(PHI)
-# nullspace_qc = Function(QC)
-# nullspace_u = Function(V)
-# nullspace_p = Function(Q)
-#
-# for function in [nullspace_phi, nullspace_qc, nullspace_u]:
-#     function.vector.set(0.0)
-# nullspace_p.vector.set(1.0)
-#
-# The pressure nullspace must be reconstructed to match the problem size
-# p_nullspc_nest = PETSc.Vec().createNest((nullspace_phi.vector,
-#                                          nullspace_qc.vector,
-#                                          nullspace_u.vector,
-#                                          nullspace_p.vector))
-#
-# nullspc_nest = cpp.la.VectorSpaceBasis([p_nullspc_nest])
-# nullspc_nest.orthonormalize()
-#
-# rbms = [Function(V) for j in range(mesh.geometry.dim + 1)]
-# rbms[0].interpolate(lambda x: np.column_stack((np.ones_like(x[:, 0]), np.zeros_like(x[:, 0]))))
-# rbms[1].interpolate(lambda x: np.column_stack((np.zeros_like(x[:, 0]), np.ones_like(x[:, 0]))))
-# rbms[2].interpolate(lambda x: np.column_stack((-x[:, 1], x[:, 0])))
-#
-# rbms = cpp.la.VectorSpaceBasis(list(rbm.vector for rbm in rbms))
-# rbms.orthonormalize()
 
 # Construct nonlinear solvers
 F, J, P = map(dolfinx.fem.form, (F, J, P))
@@ -262,13 +255,17 @@ else:
 
     ksp_phi, ksp_p_c, ksp_u, ksp_p = snes.getKSP().getPC().getFieldSplitSubKSP()
     ksp_phi.setType("gmres")
-    ksp_phi.getPC().setType('bjacobi')
+    ksp_phi.getPC().setType("bjacobi")
     ksp_p_c.setType("gmres")
-    ksp_p_c.getPC().setType('bjacobi')
-    ksp_u.setType("preonly")
-    ksp_u.getPC().setType('hypre')
+    ksp_p_c.getPC().setType("bjacobi")
+    ksp_u.setType("gmres")
+    ksp_u.getPC().setType("gamg")
+    ksp_u.getPC().setGAMGType(PETSc.PC.GAMGType.AGG)
     ksp_p.setType("gmres")
-    ksp_p.getPC().setType('bjacobi')
+    ksp_p.getPC().setType("bjacobi")
+
+    Jmat_VV = Jmat.getNestSubMatrix(2, 2)
+    Jmat_VV.setNearNullSpace(solver_utils.build_symmetric_gradient_nullspace(V))
 
 opts = PETSc.Options()
 opts["snes_monitor"] = None
@@ -277,6 +274,7 @@ if matrix_type is MatrixType.nest:
     opts["ksp_rtol"] = 1e-6
     opts["ksp_atol"] = 1e-8
     opts["ksp_max_it"] = 50
+    opts["ksp_u_mg_levels_ksp_chebyshev_esteig_steps"] = 10
 opts["snes_converged_reason"] = None
 snes.setFromOptions()
 
