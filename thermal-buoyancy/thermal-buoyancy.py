@@ -131,7 +131,7 @@ def run_model(p, formulator_class, case, n_ele):
         T, ufl.TestFunction(formulator_heat.function_space), umid)
     J_T = ufl.derivative(F_T, T)
 
-    # -- Picard forms and solvers
+    # Picard forms and solvers
     F, J, F_T, J_T = map(dolfinx.fem.form, (F, J, F_T, J_T))
     u_bcs = formulator.create_bcs(formulator.function_space)
     problem_stokes = tb.utils.NonlinearPDE_SNESProblem(F, J, U, u_bcs)
@@ -166,8 +166,8 @@ def run_model(p, formulator_class, case, n_ele):
             PETSc.Sys.Print(f"Picard iteration converged")
             break
 
-    # -- Compute functionals
-    TOP, BOTTOM, LEFT, RIGHT = 1, 2, 3, 4
+    # Compute functionals
+    TOP, BOTTOM = 1, 2
 
     facets_bot = dolfinx.mesh.locate_entities_boundary(
         mesh, dim=mesh.topology.dim-1,
@@ -198,12 +198,9 @@ def run_model(p, formulator_class, case, n_ele):
     ff = dolfinx.mesh.meshtags(mesh, mesh.topology.dim-1, facet_indices[asort], facet_values[asort])
     ds = ufl.Measure("ds", subdomain_data=ff)
 
-    Nu_form_numerator = dolfinx.fem.form(ufl.dot(ufl.grad(T), n) * ds(TOP))
-    Nu_form_denominator = dolfinx.fem.form(T * ds(BOTTOM))
-
-    Nu = mesh.comm.allreduce(dolfinx.fem.assemble_scalar(Nu_form_numerator), MPI.SUM) / \
-         mesh.comm.allreduce(dolfinx.fem.assemble_scalar(Nu_form_denominator), MPI.SUM)
-    Nu = -Nu
+    Nu_numerator = assemble_scalar_form(-ufl.dot(ufl.grad(T), n) * ds(TOP))
+    Nu_denominator = assemble_scalar_form(T * ds(BOTTOM))
+    Nu = Nu_numerator / Nu_denominator
 
     u = formulator.velocity(U)
     eps_u = ufl.sym(ufl.grad(u))
