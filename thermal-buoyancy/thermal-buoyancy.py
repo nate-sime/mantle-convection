@@ -247,10 +247,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    p = 3
+    p = 2
     formulator_class = tb.stokes.TaylorHood
     # formulator_class = tb.stokes.C0_SIPG
-    case = Tosi.tosi_4
+    case = Blankenbach.one_a
     df = pandas.DataFrame()
     for n_ele in [8, 16, 32]:
         data = run_model(p, formulator_class, case, n_ele)
@@ -259,4 +259,4 @@ if __name__ == "__main__":
     pandas.set_option('display.max_rows', df.shape[0])
     pandas.set_option('display.max_columns', df.shape[1])
     pandas.set_option('display.width', 180)
-    print(df)
+    PETSc.Sys.Print(df)
