@@ -223,9 +223,10 @@ def run_model(p, formulator_class, case, n_ele):
     }, index=[0])
 
         # Output function checkpoint for particle advection plot
-    if output_velcoity := False:
+    if output_velocity := True:
         import adios4dolfinx
-        finame = f"./checkpoint/uh_{case}_{formulation}_p{p}_n{n_ele}.bp"
+        finame = f"./checkpoints/" \
+                 f"uh_{case}_{formulator_class.__name__}_p{p}_n{n_ele}.bp"
         adios4dolfinx.write_mesh(mesh, finame)
         uh = formulator.velocity_for_output(U)
         adios4dolfinx.write_function(uh, finame)
@@ -234,16 +235,6 @@ def run_model(p, formulator_class, case, n_ele):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--distribute", type=bool, default=False)
-    parser.add_argument("--case", type=str, default="Tosi.tosi_1")
-    parser.add_argument("--p", type=int, default=2)
-    parser.add_argument("--form", type=str, default="grad_curl")
-
-    args = parser.parse_args()
-
     p = 2
     formulator_class = tb.stokes.TaylorHood
     # formulator_class = tb.stokes.C0_SIPG
