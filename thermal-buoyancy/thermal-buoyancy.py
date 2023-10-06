@@ -223,7 +223,7 @@ def run_model(p, formulator_class, case, n_ele):
     }, index=[0])
 
         # Output function checkpoint for particle advection plot
-    if output_velocity := True:
+    if output_velocity := False:
         import adios4dolfinx
         finame = f"./checkpoints/" \
                  f"uh_{case}_{formulator_class.__name__}_p{p}_n{n_ele}.bp"
