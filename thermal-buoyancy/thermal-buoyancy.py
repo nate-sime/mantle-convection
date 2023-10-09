@@ -14,58 +14,64 @@ import tb.stokes
 import tb.heat
 
 
-def gen_Ra_val(case):
-    if isinstance(case, Blankenbach):
-        if case in (Blankenbach.one_a, Blankenbach.two_a):
-            return 1e4
-        elif case is Blankenbach.one_b:
-            return 1e5
-        elif case is Blankenbach.one_c:
-            return 1e6
-    elif isinstance(case, Tosi):
-        return 1e2
+class ViscosityFormulator:
 
+    def __init__(self, d_eta_T, d_eta_z,
+                 eta_star=None, sigma_y=None):
+        self.d_eta_T = d_eta_T
+        self.d_eta_z = d_eta_z
+        self.eta_star = eta_star
+        self.sigma_y = sigma_y
 
-def form_mu(T, u, case):
-    mesh = T.ufl_domain()
-    if isinstance(case, Blankenbach):
-        if case in (Blankenbach.one_a, Blankenbach.one_b, Blankenbach.one_c):
-            mu = dolfinx.fem.Constant(mesh, 1.0)
-        elif case is Blankenbach.two_a:
-            mu = ufl.exp(-ufl.ln(1000.0) * T)
-    elif isinstance(case, Tosi):
-        x = ufl.SpatialCoordinate(mesh)
+    def mu_linear(self, T, u):
+        x = ufl.SpatialCoordinate(T.function_space.mesh)
         z = 1 - x[1]
-        gamma_T = dolfinx.fem.Constant(mesh, np.log(1e5))
-        gamma_z = dolfinx.fem.Constant(mesh, np.log(1.0))
-        mu_lin = ufl.exp(-gamma_T * T + gamma_z * z)
+        return ufl.exp(-ufl.ln(self.d_eta_T) * T + ufl.ln(self.d_eta_z) * z)
 
-        eta_star = dolfinx.fem.Constant(mesh, 1e-3)
-        sigma_y = dolfinx.fem.Constant(mesh, 1.0)
-        epsII = ufl.sqrt(ufl.sym(ufl.grad(u))**2)
-        mu_plast = eta_star + sigma_y / epsII
+    def mu_plastic(self, T, u):
+        epsII = ufl.sqrt(ufl.sym(ufl.grad(u)) ** 2)
+        return self.eta_star + self.sigma_y / epsII
 
-        if case is Tosi.tosi_1:
-            gamma_T.value = np.log(1e5)
-            gamma_z.value = np.log(1.0)
-            mu = mu_lin
-        elif case is Tosi.tosi_2:
-            gamma_T.value = np.log(1e5)
-            gamma_z.value = np.log(1.0)
-            eta_star.value = 1e-3
-            sigma_y.value = 1.0
-            mu = 2 * (mu_lin**-1 + mu_plast**-1)**-1
-        elif case is Tosi.tosi_3:
-            gamma_T.value = np.log(1e5)
-            gamma_z.value = np.log(10.0)
-            mu = mu_lin
-        elif case is Tosi.tosi_4:
-            gamma_T.value = np.log(1e5)
-            gamma_z.value = np.log(10.0)
-            eta_star.value = 1e-3
-            sigma_y.value = 1.0
-            mu = 2 * (mu_lin**-1 + mu_plast**-1)**-1
-    return mu
+    def mu_combined(self, T, u):
+        mu_lin = self.mu_linear(T, u)
+        mu_plast = self.mu_plastic(T, u)
+        return 2 * (mu_lin**-1 + mu_plast**-1)**-1
+
+
+cases = {
+    "Blankenbach_1a":
+        {
+            "Ra": 1e4,
+            "mu": ViscosityFormulator(d_eta_T=1, d_eta_z=1).mu_linear
+        },
+    "Blankenbach_2a":
+        {
+            "Ra": 1e4,
+            "mu": ViscosityFormulator(d_eta_T=1e3, d_eta_z=1).mu_linear
+        },
+    "Tosi_1":
+        {
+            "Ra": 1e2,
+            "mu": ViscosityFormulator(d_eta_T=1e5, d_eta_z=1).mu_linear
+        },
+    "Tosi_2":
+        {
+            "Ra": 1e2,
+            "mu": ViscosityFormulator(
+                d_eta_T=1e5, d_eta_z=1, eta_star=1e-3, sigma_y=1).mu_combined
+        },
+    "Tosi_3":
+        {
+            "Ra": 1e2,
+            "mu": ViscosityFormulator(d_eta_T=1e5, d_eta_z=10).mu_linear
+        },
+    "Tosi_4":
+        {
+            "Ra": 1e2,
+            "mu": ViscosityFormulator(
+                d_eta_T=1e5, d_eta_z=10, eta_star=1e-3, sigma_y=1).mu_combined
+        },
+}
 
 
 class Formulation(enum.Enum):
@@ -74,23 +80,8 @@ class Formulation(enum.Enum):
     grad_curl_ripg = enum.auto()
 
 
-
-class Blankenbach(enum.Enum):
-    one_a = enum.auto()
-    one_b = enum.auto()
-    one_c = enum.auto()
-    two_a = enum.auto()
-
-
-class Tosi(enum.Enum):
-    tosi_1 = enum.auto()
-    tosi_2 = enum.auto()
-    tosi_3 = enum.auto()
-    tosi_4 = enum.auto()
-
-
 def run_model(p, formulator_class, case, n_ele):
-    ra_val = gen_Ra_val(case)
+    ra_val = cases[case]["Ra"]
     cell_type = dolfinx.mesh.CellType.triangle
 
     mesh = dolfinx.mesh.create_rectangle(
@@ -118,9 +109,10 @@ def run_model(p, formulator_class, case, n_ele):
     A = 0.05
     T.interpolate(
         lambda x: 1.0 - x[1] + A*np.cos(np.pi*x[0]/1.0)*np.sin(np.pi*x[1]/1.0))
+    T.x.scatter_forward()
 
     umid = formulator.velocity(Umid)
-    mu = form_mu(Tmid, umid, case)
+    mu = cases[case]["mu"](Tmid, umid)
     f = Ra * Tmid * ufl.as_vector((0, 1))
 
     F = formulator.formulate(mu, f, U)
@@ -134,6 +126,8 @@ def run_model(p, formulator_class, case, n_ele):
     # Picard forms and solvers
     F, J, F_T, J_T = map(dolfinx.fem.form, (F, J, F_T, J_T))
     u_bcs = formulator.create_bcs(formulator.function_space)
+
+    # Ghost updates are handled by the NonlinearPDE_SNESProblem class
     problem_stokes = tb.utils.NonlinearPDE_SNESProblem(F, J, U, u_bcs)
     solver_stokes = tb.utils.create_snes(
         problem_stokes, F, J, max_it=1, extra_opts=extra_opts)
@@ -195,12 +189,20 @@ def run_model(p, formulator_class, case, n_ele):
     hmin = mesh.comm.allreduce(h_measure.min(), op=MPI.MIN)
     hmax = mesh.comm.allreduce(h_measure.max(), op=MPI.MAX)
 
-    ff = dolfinx.mesh.meshtags(mesh, mesh.topology.dim-1, facet_indices[asort], facet_values[asort])
+    ff = dolfinx.mesh.meshtags(
+        mesh, mesh.topology.dim-1, facet_indices[asort], facet_values[asort])
     ds = ufl.Measure("ds", subdomain_data=ff)
 
     Nu_numerator = assemble_scalar_form(-ufl.dot(ufl.grad(T), n) * ds(TOP))
     Nu_denominator = assemble_scalar_form(T * ds(BOTTOM))
     Nu = Nu_numerator / Nu_denominator
+
+    # with dolfinx.io.VTXWriter(mesh.comm, "debug.bp", [U.sub(0).collapse()]) as fi:
+    #     fi.write(0.0)
+    # print(T.vector.norm())
+    # with dolfinx.io.VTXWriter(mesh.comm, "debug.bp", [T]) as fi:
+    #     fi.write(0.0)
+    # quit()
 
     u = formulator.velocity(U)
     eps_u = ufl.sym(ufl.grad(u))
@@ -238,9 +240,9 @@ if __name__ == "__main__":
     p = 2
     formulator_class = tb.stokes.TaylorHood
     # formulator_class = tb.stokes.C0_SIPG
-    case = Blankenbach.one_a
+    case = "Blankenbach_1a"
     df = pandas.DataFrame()
-    for n_ele in [8, 16, 32]:
+    for n_ele in [16, 32, 64]:
         data = run_model(p, formulator_class, case, n_ele)
         df = pandas.concat((df, data), ignore_index=True)
 

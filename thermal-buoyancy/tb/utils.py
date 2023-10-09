@@ -1,34 +1,26 @@
+import typing
+
+import numpy as np
 from petsc4py import PETSc
 from mpi4py import MPI
 import dolfinx
 
 
-def create_snes(problem, F, J, max_it, rtol=1e-14, atol=1e-14, extra_opts={}):
-    snes = PETSc.SNES().create(MPI.COMM_WORLD)
-    snes.max_it = max_it
-    snes.setTolerances(rtol=rtol, atol=atol)
-    opts = PETSc.Options()
-    # opts["snes_monitor"] = None
-    for k, v in extra_opts.items():
-        opts[k] = v
-    snes.setFromOptions()
-    snes.getKSP().getPC().setType("lu")
-    snes.getKSP().getPC().setFactorSolverType("mumps")
-    snes.setFunction(problem.F_mono, dolfinx.fem.petsc.create_vector(F))
-    snes.setJacobian(problem.J_mono, J=dolfinx.fem.petsc.create_matrix(J))
-    snes.setTolerances(rtol=1e-14, atol=1e-14)
-    return snes
-
-
-def create_bc_geo_marker(V, marker, value):
+def create_bc_geo_marker(V: dolfinx.fem.FunctionSpaceBase,
+                         marker: typing.Callable[[np.ndarray], np.ndarray],
+                         value: dolfinx.fem.Function,
+                         tdim: typing.Optional[int] = None):
     if isinstance(V, (tuple, list)):
         mesh = V[0].mesh
     else:
         mesh = V.mesh
+
+    if tdim is None:
+        tdim = mesh.topology.dim - 1
+
     facets = dolfinx.mesh.locate_entities_boundary(
-        mesh, dim=mesh.topology.dim-1, marker=marker)
-    dofs = dolfinx.fem.locate_dofs_topological(
-        V, mesh.topology.dim - 1, facets)
+        mesh, dim=tdim, marker=marker)
+    dofs = dolfinx.fem.locate_dofs_topological(V, tdim, facets)
     if isinstance(V, (tuple, list)):
         bc = dolfinx.fem.dirichletbc(value, dofs, V[0])
     else:
@@ -139,3 +131,23 @@ class NonlinearPDE_SNESProblem():
                 P, self.a_precon, bcs=self.bcs, diagonal=1.0)
             P.assemble()
 
+
+def create_snes(problem: NonlinearPDE_SNESProblem,
+                F: dolfinx.fem.Form, J: dolfinx.fem.Form, max_it: int,
+                rtol: typing.Optional[float] = 1e-14,
+                atol: typing.Optional[float] = 1e-14,
+                extra_opts: typing.Optional[dict] = {}):
+    snes = PETSc.SNES().create(MPI.COMM_WORLD)
+    snes.max_it = max_it
+    snes.setTolerances(rtol=rtol, atol=atol)
+    opts = PETSc.Options()
+    # opts["snes_monitor"] = None
+    for k, v in extra_opts.items():
+        opts[k] = v
+    snes.setFromOptions()
+    snes.getKSP().getPC().setType("lu")
+    snes.getKSP().getPC().setFactorSolverType("mumps")
+    snes.setFunction(problem.F_mono, dolfinx.fem.petsc.create_vector(F))
+    snes.setJacobian(problem.J_mono, J=dolfinx.fem.petsc.create_matrix(J))
+    snes.setTolerances(rtol=1e-14, atol=1e-14)
+    return snes

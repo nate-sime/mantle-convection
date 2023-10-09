@@ -54,11 +54,13 @@ class TaylorHood(tb.AbstractFormulation):
             (W.sub(0).sub(1), Vvel[0]),
             lambda x: np.isclose(x[1], 0.0) | np.isclose(x[1], 1.0), zero_v)
 
+        # Pin single pressure DoF for solvable system
         Q = W.sub(1).collapse()
         zero_p = dolfinx.fem.Function(Q[0])
-        dofs_p = dolfinx.fem.locate_dofs_topological(
-            (W.sub(1), Q[0]), 0, [0])
-        zero_p_bc = dolfinx.fem.dirichletbc(zero_p, dofs_p, W.sub(1))
+        zero_p_bc = tb.utils.create_bc_geo_marker(
+            (W.sub(1), Q[0]),
+            lambda x: np.isclose(x[0], 0.0) & np.isclose(x[1], 0.0), zero_p,
+            tdim=0)
 
         u_bcs = [zero_bc_x, zero_bc_y, zero_p_bc]
         return u_bcs
