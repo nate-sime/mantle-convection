@@ -197,13 +197,6 @@ def run_model(p, formulator_class, case, n_ele):
     Nu_denominator = assemble_scalar_form(T * ds(BOTTOM))
     Nu = Nu_numerator / Nu_denominator
 
-    # with dolfinx.io.VTXWriter(mesh.comm, "debug.bp", [U.sub(0).collapse()]) as fi:
-    #     fi.write(0.0)
-    # print(T.vector.norm())
-    # with dolfinx.io.VTXWriter(mesh.comm, "debug.bp", [T]) as fi:
-    #     fi.write(0.0)
-    # quit()
-
     u = formulator.velocity(U)
     eps_u = ufl.sym(ufl.grad(u))
     tau = 2 * mu * ufl.sym(ufl.grad(u))
@@ -225,7 +218,7 @@ def run_model(p, formulator_class, case, n_ele):
     }, index=[0])
 
         # Output function checkpoint for particle advection plot
-    if output_velocity := False:
+    if output_velocity := True:
         import adios4dolfinx
         finame = f"./checkpoints/" \
                  f"uh_{case}_{formulator_class.__name__}_p{p}_n{n_ele}.bp"
