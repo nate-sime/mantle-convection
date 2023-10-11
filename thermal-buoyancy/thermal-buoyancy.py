@@ -26,7 +26,8 @@ class ViscosityFormulator:
     def mu_linear(self, T, u):
         x = ufl.SpatialCoordinate(T.function_space.mesh)
         z = 1 - x[1]
-        return ufl.exp(-ufl.ln(self.d_eta_T) * T + ufl.ln(self.d_eta_z) * z)
+        return ufl.as_ufl(
+            ufl.exp(-ufl.ln(self.d_eta_T) * T + ufl.ln(self.d_eta_z) * z))
 
     def mu_plastic(self, T, u):
         epsII = ufl.sqrt(ufl.sym(ufl.grad(u)) ** 2)
@@ -80,7 +81,7 @@ class Formulation(enum.Enum):
     grad_curl_ripg = enum.auto()
 
 
-def run_model(p, formulator_class, case, n_ele):
+def run_model(p, formulator_class, case, n_ele, write_solution):
     ra_val = cases[case]["Ra"]
     cell_type = dolfinx.mesh.CellType.triangle
 
@@ -155,7 +156,7 @@ def run_model(p, formulator_class, case, n_ele):
 
         rel_diff = (T.vector - T_n.vector).norm() / T_n.vector.norm()
         PETSc.Sys.Print(
-            f"Picard it: {j+1}, relative difference {rel_diff:.3e}")
+            f"Picard it: {j+1}, ‖Tₙ₊₁ − Tₙ‖₂ / ‖Tₙ‖₂ = {rel_diff:.3e}")
         if rel_diff < 1e-6:
             PETSc.Sys.Print(f"Picard iteration converged")
             break
@@ -217,29 +218,75 @@ def run_model(p, formulator_class, case, n_ele):
         "delta": abs(W_avg - Phi_Ra_avg) / max(W_avg, Phi_Ra_avg)
     }, index=[0])
 
-        # Output function checkpoint for particle advection plot
-    if output_velocity := True:
-        import adios4dolfinx
-        finame = f"./checkpoints/" \
-                 f"uh_{case}_{formulator_class.__name__}_p{p}_n{n_ele}.bp"
-        adios4dolfinx.write_mesh(mesh, finame)
-        uh = formulator.velocity_for_output(U)
-        adios4dolfinx.write_function(uh, finame)
+    if write_solution:
+        import pathlib
+        output_dir = pathlib.Path("./results")
+        finame_prefix = f"{case}_{formulator_class.__name__}_p{p}_n{n_ele}"
+        u_output = formulator.velocity_for_output(U)
+        u_output.name = "u"
+        T.name = "T"
+
+        temperature_file = output_dir / (finame_prefix + "_temperature.bp")
+        with dolfinx.io.VTXWriter(MPI.COMM_WORLD, temperature_file, [T]) as fi:
+            fi.write(0.0)
+
+        velocity_file = output_dir / (finame_prefix + "_velocity.bp")
+        with dolfinx.io.VTXWriter(
+                MPI.COMM_WORLD, velocity_file, [u_output]) as fi:
+            fi.write(0.0)
+
+        viscosity_output = dolfinx.fem.Function(dolfinx.fem.FunctionSpace(
+            mesh, ("DG", p-2)), name="mu")
+        mu_output = cases[case]["mu"](T, u)
+        viscosity_output.interpolate(dolfinx.fem.Expression(
+            mu_output,
+            viscosity_output.function_space.element.interpolation_points(),
+            comm=mesh.comm))
+        viscosity_file = output_dir / (finame_prefix + "_viscosity.bp")
+        with dolfinx.io.VTXWriter(
+            MPI.COMM_WORLD, viscosity_file, [viscosity_output]) as fi:
+            fi.write(0.0)
+
+        try:
+            import adios4dolfinx
+            aout = pathlib.Path("./checkpoints/")
+            def write_function(f, filename):
+                adios4dolfinx.write_mesh(mesh, filename)
+                adios4dolfinx.write_function(f, filename)
+            write_function(u_output, aout / (finame_prefix + "_velocity.bp"))
+            write_function(T, aout / (finame_prefix + "_temperature.bp"))
+            write_function(viscosity_output,
+                           aout / (finame_prefix + "_viscosity.bp"))
+        except ImportError as err:
+            PETSc.Sys.Print("adios4dolfinx required to checkpoint solution")
 
     return data
 
 
 if __name__ == "__main__":
-    p = 2
-    formulator_class = tb.stokes.TaylorHood
-    # formulator_class = tb.stokes.C0_SIPG
-    case = "Blankenbach_1a"
-    df = pandas.DataFrame()
-    for n_ele in [16, 32, 64]:
-        data = run_model(p, formulator_class, case, n_ele)
-        df = pandas.concat((df, data), ignore_index=True)
+    # Polynomial degree of discretisation scheme
+    p = 3
 
-    pandas.set_option('display.max_rows', df.shape[0])
-    pandas.set_option('display.max_columns', df.shape[1])
-    pandas.set_option('display.width', 180)
-    PETSc.Sys.Print(df)
+    # Discretisation scheme
+    formulator_class = tb.stokes.C0_SIPG
+
+    # Run all cases, or choose subsets of cases
+    example_cases = cases.keys()
+
+    # Number of elements in each direction. For convergence tests use a
+    # sequence, e.g. [16, 32, 64]
+    n_eles = [16]
+
+    # itera
+    for case in example_cases:
+        df = pandas.DataFrame()
+        for n_ele in n_eles:
+            data = run_model(
+                p, formulator_class, case, n_ele, write_solution=False)
+            df = pandas.concat((df, data), ignore_index=True)
+
+        pandas.set_option('display.max_rows', df.shape[0])
+        pandas.set_option('display.max_columns', df.shape[1])
+        pandas.set_option('display.width', 180)
+        PETSc.Sys.Print(case)
+        PETSc.Sys.Print(df)
