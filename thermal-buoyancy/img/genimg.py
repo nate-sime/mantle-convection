@@ -1,10 +1,8 @@
 from mpi4py import MPI
 import numpy as np
-import adios2
 import matplotlib.pyplot as plt
 import matplotlib
 
-import h5py
 import pathlib
 
 comm = MPI.COMM_WORLD
@@ -63,8 +61,6 @@ for case in cases:
     U, V = u_data[:,0], u_data[:,1]
     speed = np.sqrt(U**2 + V**2)
     tcf = plt.tricontourf(x[:,0], x[:,1], speed / speed.max(), cmap="Blues")
-    # skip = slice(None, None, 8)
-    # plt.quiver(x[skip,0], x[skip,1], U[skip], V[skip], linewidth=1, color="black")
     plt.xlabel(r"$x$")
     plt.ylabel(r"$y$")
     plt.gca().set_aspect("equal")
@@ -74,8 +70,6 @@ for case in cases:
 
     # Viscosity plot
     mu_data = mu.eval(x, cells)
-    # lev_exp = np.arange(np.floor(np.log10(mu_data.min()) - 1),
-    #                     np.ceil(np.log10(mu_data.max()) + 1))
     lev_exp = np.arange(-5.0, 2.0)
     levs = np.power(10, lev_exp)
 
