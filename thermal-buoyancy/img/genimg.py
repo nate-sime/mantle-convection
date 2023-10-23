@@ -77,7 +77,7 @@ for case in cases:
     import matplotlib.ticker
     triplt = plt.tricontourf(x[:,0], x[:,1], mu_data.ravel()-1e-10, levs,
                              locator=matplotlib.ticker.LogLocator(),
-                             norm=matplotlib.colors.LogNorm(), cmap="Blues")
+                             norm=matplotlib.colors.LogNorm(), cmap="viridis")
     plt.xlabel(r"$x$")
     plt.ylabel(r"$y$")
     plt.gca().set_aspect("equal")
