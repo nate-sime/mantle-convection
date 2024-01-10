@@ -1,5 +1,10 @@
 # Subduction zone modelling with DOLFINx
 
+This code is provided in support of the work N. Sime, C. R. Wilson & P. E. van
+Keken, *Thermal modeling of subduction zones with prescribed and evolving 2D
+and 3D slab geometries* (2023)
+([arXiv](https://doi.org/10.48550/arXiv.2309.12895)).
+
 Provided is a DOLFINx implementation of the subduction zone model presented
 in [van Keken et al., *A community benchmark for subduction zone modeling*
 Physics of the Earth and Planetary Interiors (2010)](
@@ -9,13 +14,14 @@ more sophisticated geometries, material models, boundary conditions and
 geometries. This includes evolving subduction zones with prescribed interface
 geometries. For example:
 
-| Model                             | Temperature field                       |
-|-----------------------------------|-----------------------------------------|
-| Community isoviscous benchmark    | ![Community](img/subduction2d_iso.png)  |
-| Curved geometry dislocation creep | ![Curved](img/subduction2d_curved.png)  |
-| Dislocation creep Alaska          | ![Alaska](img/subduction2d_alaska.png)  |
-| Evolving 2D slab                  | ![Evolving Trench](img/evolving2d.gif)  |
-| 3D Mariana Trench                 | ![Mariana Trench](img/subduction3d.png) |
+| Model                                                                                            | Temperature field                       |
+|--------------------------------------------------------------------------------------------------|-----------------------------------------|
+| Community isoviscous benchmark                                                                   | ![Community](img/subduction2d_iso.png)  |
+| Curved geometry dislocation creep                                                                | ![Curved](img/subduction2d_curved.png)  |
+| Dislocation creep Alaska                                                                         | ![Alaska](img/subduction2d_alaska.png)  |
+| Evolving 2D slab                                                                                 | ![Evolving Trench](img/evolving2d.gif)  |
+| 3D Mariana Trench                                                                                | ![Mariana Trench](img/subduction3d.png) |
+| 3D Nazca plate <br/>(see [Sime et al. 2023](https://doi.org/10.48550/arXiv.2309.12895), Fig 16.) | ![Nazca plate](img/nazca.gif)           |
 
 
 ### Note
@@ -91,8 +97,7 @@ of their model.
 
 # References
 
-This code is provided in support of the work N. Sime, C. R. Wilson & P. E. van
-Keken, *Thermal modeling of subduction zones with prescribed and evolving 2D
+N. Sime, C. R. Wilson & P. E. van Keken, *Thermal modeling of subduction zones with prescribed and evolving 2D
 and 3D slab geometries* (2023)
 ([arXiv](https://doi.org/10.48550/arXiv.2309.12895)).
 
